@@ -37,8 +37,31 @@ class QuotePool {
     return added;
   }
 
-  pick(excludeIds, rng) {
-    return pickRandom(this.records, excludeIds, rng);
+  /** Les répliques dont le film est sorti entre `from` et `to` (bornes incluses). Sans plage : toutes. */
+  inRange({ from, to } = {}) {
+    if (from == null && to == null) return this.records;
+    const min = from ?? -Infinity;
+    const max = to ?? Infinity;
+    return this.records.filter((r) => Number.isInteger(r.year) && r.year >= min && r.year <= max);
+  }
+
+  /** Première et dernière année de sortie présentes dans le réservoir. */
+  bounds() {
+    const years = this.records.map((r) => r.year).filter(Number.isInteger);
+    return years.length ? { min: Math.min(...years), max: Math.max(...years) } : null;
+  }
+
+  /** Nombre de répliques par année de sortie. */
+  yearCounts() {
+    const counts = new Map();
+    for (const { year } of this.records) {
+      if (Number.isInteger(year)) counts.set(year, (counts.get(year) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  pick(excludeIds, rng, range) {
+    return pickRandom(this.inRange(range), excludeIds, rng);
   }
 }
 

@@ -65,6 +65,7 @@ function answerFor(movie) {
  * Quand tout a été vu, le tirage repart de zéro (`reset: true`).
  */
 function pickRandom(movies, excludeIds = [], rng = Math.random) {
+  if (movies.length === 0) return { movie: null, reset: false };
   const excluded = new Set(excludeIds);
   let pool = movies.filter((m) => !excluded.has(m.id));
   let reset = false;

@@ -226,8 +226,14 @@ function parseFilmPage(page) {
   const wikitext = page?.revisions?.[0]?.slots?.main?.content;
   if (!wikitext || !page.title) return [];
 
-  const meta = extractFilmMeta(page.title, wikitext);
   const templates = findTemplates(wikitext);
+  // Les catégories d'année (« Œuvre de 1995 ») mélangent films, livres et séries :
+  // on exige une fiche « Réf Film » ou une catégorie « Film… ».
+  const isFilm =
+    templates.some((t) => t.name === 'réf film') || extractCategories(wikitext).some((c) => /^films?\b/i.test(c));
+  if (!isFilm) return [];
+
+  const meta = extractFilmMeta(page.title, wikitext);
   const url = `${WIKI_HOST}/wiki/${encodeURIComponent(page.title.replace(/ /g, '_'))}`;
   const records = [];
   let index = -1;

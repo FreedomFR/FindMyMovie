@@ -3,6 +3,8 @@
 Un petit jeu web : une réplique culte s'affiche, à toi de retrouver le film.
 Si tu sèches, des **indices** (année, pays, genre, réalisateur, acteur, personnage, initiale du titre) sont disponibles — mais ils ne se dévoilent **qu'au clic**. Un bouton **Révéler la réponse** affiche le film et sa fiche complète.
 
+Tu peux aussi **choisir une période** (« 1990 – 1999 », « avant 1970 »…) : seuls des films sortis dans cette plage sont proposés. Et, si tu veux, **créer un compte** (facultatif) pour conserver ton historique de joueur.
+
 Les répliques viennent de deux sources :
 - **44 répliques embarquées** (`data/quotes.json`), toujours disponibles, même hors ligne ;
 - **des centaines, puis des milliers de répliques récoltées sur [Wikiquote](https://fr.wikiquote.org/)** via son API, en arrière-plan.
@@ -37,7 +39,8 @@ Le fichier `render.yaml` décrit le service : un clic sur le bouton, une connexi
 Limites de l'offre gratuite (voir la [documentation de Render](https://render.com/docs/free)) :
 
 - le service **se met en veille après 15 minutes sans visite** et met environ une minute à se réveiller ;
-- son disque est **éphémère** : le cache des répliques récoltées est perdu à chaque veille ou redéploiement, la récolte repart donc de zéro (les 44 répliques embarquées restent toujours disponibles).
+- son disque est **éphémère** : le cache des répliques récoltées est perdu à chaque veille ou redéploiement, la récolte repart donc de zéro (les 44 répliques embarquées restent toujours disponibles) ;
+- pour la même raison, **les comptes et les historiques des joueurs sont aussi perdus** (voir « Comptes et historique » plus bas). Pour les conserver, il faut un disque persistant (offre payante de Render) ou un autre hébergeur avec volume.
 
 N'importe quel hébergeur de conteneurs convient : l'image écoute sur `$PORT`, expose `/healthz` et utilise `/data` pour son cache (à monter sur un disque persistant pour le conserver).
 
@@ -47,7 +50,7 @@ Node.js ≥ 20 suffit, il n'y a rien à installer :
 
 ```bash
 npm start      # http://localhost:3000 (cache dans ./cache)
-npm test       # tests de l'analyse Wikiquote, du moissonneur et de l'API
+npm test       # tests de l'analyse Wikiquote, du moissonneur, des comptes et de l'API
 ```
 
 ## Configuration
@@ -58,6 +61,9 @@ npm test       # tests de l'analyse Wikiquote, du moissonneur et de l'API
 | `DATA_DIR` | `./cache` (`/data` dans Docker) | Dossier du cache des répliques récoltées |
 | `WIKIQUOTE_ENABLED` | `true` | `false` : plus aucun appel à Wikiquote (le cache déjà récolté reste utilisé) |
 | `WIKIQUOTE_INTERVAL_MS` | `5000` | Pause entre deux requêtes à Wikiquote |
+| `ACCOUNTS_ENABLED` | `true` | `false` : pas de comptes, le jeu fonctionne comme avant |
+| `MAX_USERS` | `1000` | Nombre maximal de comptes (les inscriptions se ferment ensuite) |
+| `TRUST_PROXY` | `false` | `true` derrière un reverse proxy de confiance : l'adresse du joueur est lue dans `X-Forwarded-For` (déjà réglé pour Render) |
 
 Derrière un proxy d'entreprise, Node ≥ 22.21 sait l'utiliser avec `NODE_USE_ENV_PROXY=1`.
 
@@ -76,15 +82,39 @@ Le jeu n'attend jamais Wikiquote : il pioche dans ce qui est déjà récolté. S
 
 **Courtoisie envers Wikiquote.** Le moissonneur s'identifie par un `User-Agent` explicite, fait une requête à la fois, et respecte les limites de débit : sur un `429`, il attend le délai demandé par `Retry-After` ; sur les autres erreurs, il attend de plus en plus longtemps (30 s, puis 1 min, 2 min… jusqu'à 15 min).
 
+### Période d'années
+
+Le panneau « Période » au-dessus de la réplique accepte deux années (l'une ou l'autre peut rester vide) ou un préréglage. Le serveur ne tire alors que des films sortis **entre ces deux années, bornes comprises** ; si les bornes sont inversées, elles sont remises dans l'ordre. Le choix est mémorisé dans le navigateur.
+
+La plage guide aussi la récolte : les années choisies qui manquent de films passent en tête de la moisson, via les catégories Wikiquote « Œuvre de 1995 »… (qui mélangent films, livres et séries : seules les pages avec une fiche `{{Réf Film}}` ou une catégorie « Film… » sont gardées). Si aucun film n'est encore disponible pour la période, l'interface le dit et réessaie toute seule quelques fois pendant que la récolte cherche.
+
+### Comptes et historique
+
+Les comptes sont **facultatifs** : sans compte, rien ne change. Avec un compte (pseudo + mot de passe, sans e-mail), chaque réponse révélée est ajoutée à l'historique, et le joueur indique s'il avait trouvé (« Oui / Non »). Le bouton **Mon historique** affiche les 50 dernières parties et les statistiques (parties, trouvées, taux de réussite, indices par partie). Les 300 dernières parties sont conservées.
+
+Sécurité :
+
+- mots de passe hachés avec `scrypt` (sel aléatoire, comparaison à temps constant), jamais écrits en clair ni renvoyés ;
+- session par cookie `HttpOnly`, `SameSite=Lax` (et `Secure` en HTTPS), valable 30 jours ; seul le hachage du jeton est stocké, la déconnexion le révoque ;
+- les tentatives de connexion sont limitées (8 échecs par pseudo et 30 par adresse sur 15 minutes) et les inscriptions aussi (10 par adresse et par heure) ; un pseudo inconnu et un mauvais mot de passe donnent la même réponse ;
+- protection CSRF : les requêtes `POST` doivent être en JSON et, si un en-tête `Origin` est présent, venir du même site ;
+- l'historique est écrit côté serveur à partir de ses propres données : un joueur ne peut pas y inscrire un titre de son choix.
+
+Le stockage est un simple fichier, réécrit en entier à chaque changement : il est pensé pour une petite communauté (quelques centaines de joueurs). Au-delà, il faudrait une vraie base de données.
+
+Les comptes sont dans `users.json`, dans `DATA_DIR` (fichier lisible par son seul propriétaire, écriture atomique). **Ce fichier doit être sur un disque persistant** (le volume `/data` de Docker Compose) : sinon comptes et historiques disparaissent au redémarrage.
+
 ### Pas de triche possible
 
 Le navigateur ne reçoit au départ que la réplique et la **liste** des indices disponibles. Le contenu de chaque indice et la réponse sont demandés au serveur au moment du clic, donc impossible de tricher en lisant le code source ou la réponse réseau initiale.
 
 | Route | Rôle |
 |---|---|
-| `GET /api/quote?exclude=id1,id2` | Tire une réplique au hasard en évitant celles déjà vues (si tout a été vu, le tirage repart de zéro : `reset: true`) |
+| `GET /api/quote?from=1990&to=1999&exclude=id1,id2` | Tire une réplique au hasard parmi les films de la période (`from` / `to` facultatifs) en évitant celles déjà vues (si tout a été vu, le tirage repart de zéro : `reset: true`) ; `empty: true` si la période n'a aucun film |
 | `GET /api/quote/:id/hint/:key` | Révèle un indice (`year`, `country`, `genre`, `director`, `actor`, `character`, `initial`) |
 | `GET /api/quote/:id/answer` | Révèle le titre, la fiche complète et la source |
+| `POST /api/auth/register`, `/login`, `/logout` · `GET /api/auth/me` | Compte du joueur (corps JSON `{ username, password }`) |
+| `GET /api/history` · `POST /api/history` · `POST /api/history/:id/result` | Historique du joueur connecté : liste et statistiques, ajout d'une partie, résultat (`{ found: true \| false }`) |
 | `GET /healthz` | Sonde de santé (utilisée par le `HEALTHCHECK` Docker) |
 
 ## Structure
@@ -93,7 +123,9 @@ Le navigateur ne reçoit au départ que la réplique et la **liste** des indices
 data/quotes.json   les répliques embarquées
 src/server.js      serveur HTTP (API + fichiers statiques) et démarrage
 src/quotes.js      indices, vues publiques, tirage
-src/pool.js        réservoir de répliques + cache JSON sur disque
+src/pool.js        réservoir de répliques (filtre par années) + cache JSON sur disque
+src/auth.js        mots de passe (scrypt), jetons, cookies, limiteur de tentatives
+src/users.js       comptes, sessions et historique des joueurs (fichier JSON)
 src/harvester.js   moissonneur d'arrière-plan (débit, reprise, arrêt propre)
 src/wikiquote.js   client de l'API Wikiquote + analyse d'une page de film
 src/wikitext.js    lecture des modèles {{…}} et nettoyage du wikitext

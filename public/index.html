@@ -12,6 +12,14 @@
 <body>
   <main class="app">
     <header class="top">
+      <nav class="account" aria-label="Compte du joueur">
+        <button type="button" class="btn btn-small btn-ghost" id="login-open" hidden>Se connecter</button>
+        <div class="user-menu" id="user-menu" hidden>
+          <span class="user-name"><span aria-hidden="true">👤</span> <strong id="username"></strong></span>
+          <button type="button" class="btn btn-small btn-ghost" id="history-open">Mon historique</button>
+          <button type="button" class="btn btn-small btn-ghost" id="logout">Se déconnecter</button>
+        </div>
+      </nav>
       <h1 class="logo"><span aria-hidden="true">🎬</span> FindMyMovie</h1>
       <p class="tagline">De quel film vient cette réplique ?</p>
     </header>
@@ -19,7 +27,24 @@
     <section class="card" aria-labelledby="quote-label">
       <p class="counter" id="quote-label">Réplique <span id="round">–</span></p>
 
+      <details class="period" id="period">
+        <summary>
+          Période : <strong id="period-label">toutes les années</strong>
+          <span class="period-count" id="period-count"></span>
+        </summary>
+        <form class="period-form" id="period-form" novalidate>
+          <div class="period-fields">
+            <label>De <input type="number" id="year-from" inputmode="numeric" step="1" min="1888" max="2100" aria-label="Année de début"></label>
+            <label>à <input type="number" id="year-to" inputmode="numeric" step="1" min="1888" max="2100" aria-label="Année de fin"></label>
+            <button type="submit" class="btn btn-small btn-primary">Appliquer</button>
+          </div>
+          <div class="presets" id="presets" role="group" aria-label="Périodes prédéfinies"></div>
+          <p class="error" id="period-error" role="alert" hidden></p>
+        </form>
+      </details>
+
       <blockquote class="quote" id="quote" aria-live="polite">Chargement…</blockquote>
+      <p class="empty" id="empty" role="status" hidden></p>
 
       <section class="hints" id="hints-section" aria-labelledby="hints-title">
         <h2 id="hints-title">Un coup de pouce ?</h2>
@@ -40,6 +65,43 @@
       <p class="credits">Répliques de départ : FindMyMovie · autres répliques : <a href="https://fr.wikiquote.org/" target="_blank" rel="noopener noreferrer">Wikiquote</a> (CC BY-SA 4.0)</p>
     </footer>
   </main>
+
+  <dialog class="dialog" id="auth-dialog" aria-labelledby="auth-title">
+    <form class="dialog-body" id="auth-form">
+      <h2 id="auth-title">Connexion</h2>
+      <p class="muted">Facultatif : un compte sert uniquement à conserver ton historique de joueur. Tu peux jouer sans.</p>
+      <div class="tabs" role="group" aria-label="Type de formulaire">
+        <button type="button" class="tab" id="tab-login" aria-pressed="true">Connexion</button>
+        <button type="button" class="tab" id="tab-register" aria-pressed="false">Créer un compte</button>
+      </div>
+      <label class="field">Pseudo
+        <input type="text" id="auth-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="3" maxlength="24">
+      </label>
+      <label class="field">Mot de passe
+        <input type="password" id="auth-password" name="password" autocomplete="current-password" required minlength="8" maxlength="128">
+      </label>
+      <p class="muted small" id="auth-help" hidden>Pseudo : 3 à 24 caractères (lettres, chiffres, _ . -). Mot de passe : 8 caractères minimum.</p>
+      <p class="error" id="auth-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" id="auth-cancel">Annuler</button>
+        <button type="submit" class="btn btn-primary" id="auth-submit">Se connecter</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="dialog dialog-wide" id="history-dialog" aria-labelledby="history-title">
+    <div class="dialog-body">
+      <h2 id="history-title">Mon historique</h2>
+      <dl class="stats" id="history-stats"></dl>
+      <p class="muted" id="history-empty" hidden>Aucune partie enregistrée pour l'instant : révèle une réponse pour commencer.</p>
+      <ol class="history-list" id="history-list"></ol>
+      <p class="error" id="history-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-primary" id="history-close">Fermer</button>
+      </div>
+    </div>
+  </dialog>
+
   <script src="/app.js"></script>
 </body>
 </html>

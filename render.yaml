@@ -10,3 +10,7 @@ services:
       # Mettre à "false" pour jouer uniquement avec les répliques embarquées.
       - key: WIKIQUOTE_ENABLED
         value: "true"
+      # Render place l'appli derrière un proxy : on lit l'adresse du joueur dans X-Forwarded-For
+      # (nécessaire pour limiter les tentatives de connexion par adresse).
+      - key: TRUST_PROXY
+        value: "true"
