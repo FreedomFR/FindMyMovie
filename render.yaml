@@ -1,0 +1,12 @@
+# Blueprint Render : déploie l'image Docker du dépôt comme service web gratuit.
+# Doc : https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: findmymovie
+    runtime: docker # utilise le Dockerfile à la racine
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      # Mettre à "false" pour jouer uniquement avec les répliques embarquées.
+      - key: WIKIQUOTE_ENABLED
+        value: "true"

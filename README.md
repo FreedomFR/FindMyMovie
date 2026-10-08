@@ -28,6 +28,19 @@ Le volume `/data` conserve les répliques déjà récoltées : sans lui, tout es
 
 L'image est basée sur `node:22-alpine`, ne contient aucune dépendance npm et s'exécute avec l'utilisateur non-root `node` (le `docker-compose.yml` ajoute système de fichiers en lecture seule et suppression des capabilities).
 
+## Déployer en ligne (Render)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/FreedomFR/FindMyMovie)
+
+Le fichier `render.yaml` décrit le service : un clic sur le bouton, une connexion à Render (compte GitHub accepté) puis **Apply**, et l'appli est en ligne sur une URL `https://findmymovie-….onrender.com`.
+
+Limites de l'offre gratuite (voir la [documentation de Render](https://render.com/docs/free)) :
+
+- le service **se met en veille après 15 minutes sans visite** et met environ une minute à se réveiller ;
+- son disque est **éphémère** : le cache des répliques récoltées est perdu à chaque veille ou redéploiement, la récolte repart donc de zéro (les 44 répliques embarquées restent toujours disponibles).
+
+N'importe quel hébergeur de conteneurs convient : l'image écoute sur `$PORT`, expose `/healthz` et utilise `/data` pour son cache (à monter sur un disque persistant pour le conserver).
+
 ## Lancer sans Docker
 
 Node.js ≥ 20 suffit, il n'y a rien à installer :
