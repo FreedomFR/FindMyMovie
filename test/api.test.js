@@ -3,12 +3,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const quotes = require('../src/quotes');
+const { QuotePool } = require('../src/pool');
 const { createServer } = require('../src/server');
 
 const movies = quotes.load();
 
-async function withServer(fn) {
-  const server = createServer(movies);
+async function withServer(fn, pool = new QuotePool(movies)) {
+  const server = createServer(pool);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -56,7 +57,7 @@ test("/api/quote ne révèle ni la réponse ni le contenu des indices", async ()
 
     assert.equal(body.quote, movie.quote);
     assert.equal(body.total, movies.length);
-    assert.deepEqual(body.hints.map((h) => h.key), quotes.HINTS.map((h) => h.key));
+    assert.deepEqual(body.hints.map((h) => h.key), quotes.availableHints(movie).map((h) => h.key));
 
     const raw = JSON.stringify(body);
     for (const secret of [movie.title, movie.director, movie.actor, movie.country, String(movie.year)]) {
@@ -87,14 +88,17 @@ test('un indice et la réponse sont servis à la demande', async () => {
 
     const answer = await (await fetch(`${base}/api/quote/${movie.id}/answer`)).json();
     assert.equal(answer.title, movie.title);
-    assert.deepEqual(answer.details.map((d) => d.key), quotes.HINTS.map((h) => h.key));
+    assert.deepEqual(answer.details.map((d) => d.key), quotes.availableHints(movie).map((h) => h.key));
+    assert.equal(answer.source, null);
   });
 });
 
 test('identifiants et indices inconnus -> 404', async () => {
   await withServer(async (base) => {
-    assert.equal((await fetch(`${base}/api/quote/99999/answer`)).status, 404);
-    assert.equal((await fetch(`${base}/api/quote/1/hint/secret`)).status, 404);
+    assert.equal((await fetch(`${base}/api/quote/inconnu/answer`)).status, 404);
+    assert.equal((await fetch(`${base}/api/quote/${movies[0].id}/hint/secret`)).status, 404);
+    // Les répliques de départ n'ont pas de « personnage » : l'indice n'existe pas pour elles.
+    assert.equal((await fetch(`${base}/api/quote/${movies[0].id}/hint/character`)).status, 404);
     assert.equal((await fetch(`${base}/api/inconnu`)).status, 404);
   });
 });
@@ -128,5 +132,36 @@ test('les méthodes autres que GET/HEAD sont refusées', async () => {
   await withServer(async (base) => {
     const res = await fetch(`${base}/api/quote`, { method: 'POST' });
     assert.equal(res.status, 405);
+  });
+});
+
+test('les indices sans donnée sont omis et la source apparaît dans la réponse', async () => {
+  const remote = {
+    id: 'wq-1-0',
+    quote: 'Une réplique venue de Wikiquote.',
+    title: 'Un Film',
+    year: 1999,
+    country: null,
+    genre: null,
+    director: null,
+    actor: null,
+    character: 'Léon',
+    source: { name: 'Wikiquote', url: 'https://fr.wikiquote.org/wiki/Un_Film' },
+  };
+  await withServer(async (base) => {
+    const quote = await (await fetch(`${base}/api/quote`)).json();
+    assert.deepEqual(quote.hints.map((h) => h.key), ['year', 'character', 'initial']);
+    assert.equal((await fetch(`${base}/api/quote/wq-1-0/hint/country`)).status, 404);
+
+    const answer = await (await fetch(`${base}/api/quote/wq-1-0/answer`)).json();
+    assert.deepEqual(answer.source, remote.source);
+    assert.deepEqual(answer.details.map((d) => d.key), ['year', 'character', 'initial']);
+  }, new QuotePool([remote]));
+});
+
+test("/api/quote ignore les identifiants d'exclusion invalides", async () => {
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/quote?exclude=${encodeURIComponent('<script>,../etc,')}`);
+    assert.equal(res.status, 200);
   });
 });

@@ -11,14 +11,18 @@ const els = {
   answer: $('answer'),
   error: $('error'),
   hintsUsed: $('hints-used'),
+  total: $('total'),
 };
 
 const SEEN_KEY = 'findmymovie.seen';
+// On n'envoie au serveur que les dernières répliques vues (l'URL doit rester courte).
+const MAX_EXCLUDED = 150;
 
 const state = {
   current: null, // { id, quote, hints }
   revealedHints: 0,
   totalHintsUsed: 0,
+  round: 0,
   busy: false,
   seen: loadSeen(),
 };
@@ -26,7 +30,7 @@ const state = {
 function loadSeen() {
   try {
     const parsed = JSON.parse(sessionStorage.getItem(SEEN_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed.filter(Number.isInteger) : [];
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
   } catch {
     return [];
   }
@@ -34,7 +38,7 @@ function loadSeen() {
 
 function saveSeen() {
   try {
-    sessionStorage.setItem(SEEN_KEY, JSON.stringify(state.seen));
+    sessionStorage.setItem(SEEN_KEY, JSON.stringify(state.seen.slice(-MAX_EXCLUDED)));
   } catch {
     // Stockage indisponible (navigation privée…) : on continue sans.
   }
@@ -120,6 +124,19 @@ async function revealAnswer() {
   }
 }
 
+function sourceLink(source) {
+  const p = document.createElement('p');
+  p.className = 'used';
+  p.append('Source : ');
+  const a = document.createElement('a');
+  a.href = source.url;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.textContent = `${source.name} (CC BY-SA 4.0)`;
+  p.append(a);
+  return p;
+}
+
 function renderAnswer(answer) {
   const title = document.createElement('h2');
   title.textContent = answer.title;
@@ -140,7 +157,9 @@ function renderAnswer(answer) {
       ? 'Aucun indice utilisé : bien joué !'
       : `Indices utilisés : ${state.revealedHints} / ${state.current.hints.length}`;
 
-  els.answer.replaceChildren(title, list, used);
+  const parts = [title, list, used];
+  if (answer.source?.url) parts.push(sourceLink(answer.source));
+  els.answer.replaceChildren(...parts);
   els.answer.hidden = false;
   els.hintsSection.hidden = true; // tout est déjà dans la fiche
   els.reveal.disabled = true;
@@ -152,7 +171,7 @@ async function nextQuote() {
   setBusy(true);
   showError('');
   try {
-    const exclude = state.seen.join(',');
+    const exclude = state.seen.slice(-MAX_EXCLUDED).join(',');
     const data = await api(`/api/quote${exclude ? `?exclude=${exclude}` : ''}`);
     if (data.reset) state.seen = []; // toutes les répliques ont été vues : on repart de zéro
     state.seen.push(data.id);
@@ -162,7 +181,9 @@ async function nextQuote() {
     state.revealedHints = 0;
 
     els.quote.textContent = data.quote;
-    els.round.textContent = `${state.seen.length} sur ${data.total}`;
+    state.round += 1;
+    els.round.textContent = `n°${state.round}`;
+    els.total.textContent = String(data.total);
     els.answer.hidden = true;
     els.answer.replaceChildren();
     els.hintsSection.hidden = false;

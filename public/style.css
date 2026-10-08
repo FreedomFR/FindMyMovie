@@ -167,6 +167,8 @@ button.hint.revealed { cursor: default; }
 
 .foot { margin-top: 20px; text-align: center; color: var(--muted); font-size: 0.85rem; }
 .foot p { margin: 0; }
+.foot .credits { margin-top: 6px; font-size: 0.78rem; }
+.foot a, .answer a { color: var(--accent); }
 
 [hidden] { display: none !important; }
 

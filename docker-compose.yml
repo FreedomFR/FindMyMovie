@@ -6,8 +6,16 @@ services:
     ports:
       - "${PORT:-3000}:3000"
     restart: unless-stopped
+    environment:
+      # Mettre à "false" pour jouer uniquement avec les répliques embarquées (hors ligne).
+      WIKIQUOTE_ENABLED: "${WIKIQUOTE_ENABLED:-true}"
+    volumes:
+      - findmymovie-data:/data
     read_only: true
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  findmymovie-data:

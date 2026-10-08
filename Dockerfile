@@ -1,7 +1,8 @@
 FROM node:22-alpine
 
 ENV NODE_ENV=production \
-    PORT=3000
+    PORT=3000 \
+    DATA_DIR=/data
 
 WORKDIR /app
 
@@ -10,6 +11,9 @@ COPY --chown=node:node package.json ./
 COPY --chown=node:node src ./src
 COPY --chown=node:node data ./data
 COPY --chown=node:node public ./public
+
+# Cache des répliques récoltées sur Wikiquote (à monter sur un volume pour le conserver).
+RUN mkdir /data && chown node:node /data
 
 USER node
 EXPOSE 3000
