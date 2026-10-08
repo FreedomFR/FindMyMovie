@@ -1,0 +1,12 @@
+{
+  "name": "findmymovie",
+  "version": "1.0.0",
+  "description": "Devine le film à partir d'une réplique culte, avec des indices à la demande.",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test \"test/*.test.js\""
+  }
+}

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FindMyMovie – Devine le film</title>
+  <meta name="description" content="Retrouve le film à partir d'une réplique culte. Des indices sont disponibles si tu sèches.">
+  <meta name="theme-color" content="#14110f">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="app">
+    <header class="top">
+      <h1 class="logo"><span aria-hidden="true">🎬</span> FindMyMovie</h1>
+      <p class="tagline">De quel film vient cette réplique ?</p>
+    </header>
+
+    <section class="card" aria-labelledby="quote-label">
+      <p class="counter" id="quote-label">Réplique <span id="round">–</span></p>
+
+      <blockquote class="quote" id="quote" aria-live="polite">Chargement…</blockquote>
+
+      <section class="hints" id="hints-section" aria-labelledby="hints-title">
+        <h2 id="hints-title">Un coup de pouce ?</h2>
+        <ul class="hint-list" id="hints"></ul>
+      </section>
+
+      <div class="actions">
+        <button type="button" class="btn btn-primary" id="reveal" disabled>Révéler la réponse</button>
+        <button type="button" class="btn btn-ghost" id="next" disabled>Réplique suivante</button>
+      </div>
+
+      <section class="answer" id="answer" aria-live="polite" hidden></section>
+      <p class="error" id="error" role="alert" hidden></p>
+    </section>
+
+    <footer class="foot">
+      <p>Indices utilisés : <span id="hints-used">0</span></p>
+    </footer>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
