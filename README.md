@@ -93,7 +93,39 @@ TRUST_PROXY=1
 
 `TRUST_PROXY=1` fait lire l'adresse du joueur dans `X-Forwarded-For` (limitation des tentatives de connexion) et marque le cookie de session `Secure`. À n'activer que si l'appli n'est joignable **que** par le proxy (`BIND_ADDRESS=127.0.0.1`) : sinon n'importe qui pourrait falsifier cet en-tête.
 
-### Avec nginx et Cloudflare
+### Avec Nginx Proxy Manager (interface graphique)
+
+C'est le plus simple. Dans Nginx Proxy Manager, **Proxy Hosts > Add Proxy Host** :
+
+| Champ | Valeur |
+|---|---|
+| Domain Names | ton domaine, par exemple `findmymovies.exemple.fr` |
+| Scheme | `http` (c'est le trajet entre NPM et l'appli) |
+| Forward Hostname / IP | l'adresse du serveur qui fait tourner Docker, par exemple `192.168.1.61` |
+| Forward Port | `9601` |
+| Cache Assets | désactivé (les réponses de l'appli ne doivent pas être mises en cache) |
+| Websockets Support | inutile |
+
+Dans l'onglet **SSL**, choisis un certificat (Let's Encrypt, ou un certificat d'origine Cloudflare) et active **Force SSL**. Si le domaine passe par Cloudflare, mets son mode SSL/TLS sur « Complet (strict) ».
+
+Côté FindMyMovie, ne change rien d'autre que le fichier `.env` à côté du `docker-compose.yml` :
+
+```
+TRUST_PROXY=2
+```
+
+`TRUST_PROXY` dit à l'appli combien de proxys de confiance sont devant elle, pour qu'elle retrouve la vraie adresse du joueur (limitation des tentatives de connexion) sans pouvoir être trompée :
+
+| Ce qui est devant l'appli | Valeur |
+|---|---|
+| Cloudflare (nuage orange) **puis** Nginx Proxy Manager | `2` |
+| Nginx Proxy Manager seul (domaine en « DNS only ») | `1` |
+
+Une mauvaise valeur affaiblit la protection sans rien casser : avec `true`, ou avec `1` derrière Cloudflare, un visiteur peut falsifier son adresse (c'est vérifié par les tests). Ne touche pas à `BIND_ADDRESS` : NPM doit pouvoir joindre l'appli par l'adresse du serveur. En revanche, **n'ouvre pas le port 9601 sur ta box** : seuls les ports 80 et 443 de NPM doivent être accessibles depuis Internet.
+
+### Avec nginx écrit à la main (et Cloudflare)
+
+*Cette section ne concerne que nginx configuré à la main : avec Nginx Proxy Manager, la section précédente suffit.*
 
 ```
 visiteur ──► Cloudflare ──HTTPS──► nginx ──HTTP──► FindMyMovie (127.0.0.1:9601)
@@ -198,7 +230,7 @@ npm test       # tests de l'analyse Wikiquote, du moissonneur, des comptes et de
 | `WIKIQUOTE_INTERVAL_MS` | `5000` | Pause entre deux requêtes à Wikiquote |
 | `ACCOUNTS_ENABLED` | `true` | `false` : pas de comptes, le jeu fonctionne comme avant |
 | `MAX_USERS` | `1000` | Nombre maximal de comptes (les inscriptions se ferment ensuite) |
-| `TRUST_PROXY` | `false` | Derrière un reverse proxy de confiance : `1` (un proxy : nginx, Caddy…), `2`… (plusieurs), ou `true` (première valeur de `X-Forwarded-For`, déjà réglé pour Render). L'adresse du joueur est lue dans `X-Forwarded-For` ; avec un nombre N, on prend la N-ième valeur depuis la droite, que les valeurs écrites par le visiteur ne peuvent pas falsifier |
+| `TRUST_PROXY` | `false` | Derrière un reverse proxy de confiance : `1` (un proxy : nginx, Caddy, Nginx Proxy Manager…), `2` (deux : par exemple Cloudflare puis Nginx Proxy Manager), ou `true` (première valeur de `X-Forwarded-For`, déjà réglé pour Render). L'adresse du joueur est lue dans `X-Forwarded-For` ; avec un nombre N, on prend la N-ième valeur depuis la droite, que les valeurs écrites par le visiteur ne peuvent pas falsifier |
 
 Derrière un proxy d'entreprise, Node ≥ 22.21 sait l'utiliser avec `NODE_USE_ENV_PROXY=1`.
 
