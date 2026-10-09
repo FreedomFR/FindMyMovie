@@ -12,7 +12,7 @@ services:
       WIKIQUOTE_ENABLED: "${WIKIQUOTE_ENABLED:-true}"
       # Mettre à "false" pour désactiver les comptes (le jeu fonctionne sans).
       ACCOUNTS_ENABLED: "${ACCOUNTS_ENABLED:-true}"
-      # À mettre à "true" uniquement derrière un reverse proxy de confiance (nginx, Traefik…).
+      # Nombre de reverse proxys de confiance devant l'appli (1 pour nginx ou Caddy), 0/false sinon : voir le README.
       TRUST_PROXY: "${TRUST_PROXY:-false}"
     volumes:
       - findmymovie-data:/data

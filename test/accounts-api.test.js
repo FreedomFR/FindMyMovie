@@ -259,3 +259,45 @@ test("la réplique enregistrée dans l'historique est tronquée pour garder le f
     await server.close();
   }
 });
+
+test("TRUST_PROXY=N lit la N-ième adresse depuis la droite : les valeurs falsifiées à gauche sont ignorées", async () => {
+  // Chaque requête invente une fausse adresse de départ ; seule l'adresse de droite, ajoutée par le proxy, compte.
+  let n = 0;
+  const attempt = (base, chain) =>
+    postJson(base, '/api/auth/login', { username: `joueur${n++}`, password: 'faux-mot-de-passe' }, { headers: { 'X-Forwarded-For': chain } });
+
+  // Un proxy de confiance (nginx) : la dernière valeur est la vraie adresse.
+  await withAccounts(
+    async (base) => {
+      for (let i = 0; i < 30; i += 1) assert.equal((await attempt(base, `66.66.66.${i}, 198.51.100.7`)).status, 401);
+      assert.equal((await attempt(base, '77.77.77.77, 198.51.100.7')).status, 429, 'même joueur malgré la fausse adresse');
+      assert.equal((await attempt(base, '77.77.77.77, 198.51.100.8')).status, 401, 'autre joueur');
+    },
+    { serverOptions: { trustProxy: 1 } },
+  );
+
+  // Deux proxys de confiance (Cloudflare puis nginx) : l'avant-dernière valeur est la vraie adresse.
+  await withAccounts(
+    async (base) => {
+      for (let i = 0; i < 30; i += 1) assert.equal((await attempt(base, `66.66.66.${i}, 198.51.100.7, 172.16.0.1`)).status, 401);
+      assert.equal((await attempt(base, '1.2.3.4, 198.51.100.7, 172.16.0.1')).status, 429);
+      assert.equal((await attempt(base, '1.2.3.4, 198.51.100.8, 172.16.0.1')).status, 401);
+    },
+    { serverOptions: { trustProxy: 2 } },
+  );
+});
+
+test("TRUST_PROXY=N retombe sur l'adresse de la connexion si l'en-tête est absent ou trop court", async () => {
+  let n = 0;
+  const attempt = (base, headers) =>
+    postJson(base, '/api/auth/login', { username: `joueur${n++}`, password: 'faux-mot-de-passe' }, { headers });
+  await withAccounts(
+    async (base) => {
+      // Aucun en-tête, puis une seule valeur alors que 2 proxys sont attendus : tout compte pour la connexion elle-même.
+      for (let i = 0; i < 15; i += 1) assert.equal((await attempt(base, {})).status, 401);
+      for (let i = 0; i < 15; i += 1) assert.equal((await attempt(base, { 'X-Forwarded-For': `9.9.9.${i}` })).status, 401);
+      assert.equal((await attempt(base, { 'X-Forwarded-For': '8.8.8.8' })).status, 429);
+    },
+    { serverOptions: { trustProxy: 2 } },
+  );
+});

@@ -135,8 +135,23 @@ function createServer(pool = new QuotePool(quotes.load()), { users = null, harve
   const loginByUser = auth.createLimiter({ max: 8, windowMs: 15 * 60_000 });
   const registerByIp = auth.createLimiter({ max: 10, windowMs: 60 * 60_000 });
 
-  const clientIp = (req) =>
-    (trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || 'inconnue';
+  /**
+   * Adresse du joueur. Sans proxy de confiance, c'est celle de la connexion. Sinon on lit X-Forwarded-For :
+   * `true` prend la première valeur (sûr seulement si le proxy écrase l'en-tête), un nombre N prend la
+   * N-ième depuis la droite, c'est-à-dire celle que N proxys de confiance ont ajoutée : les valeurs de gauche,
+   * que le visiteur peut falsifier, sont ignorées.
+   */
+  const clientIp = (req) => {
+    if (trustProxy) {
+      const forwarded = String(req.headers['x-forwarded-for'] || '')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      const index = trustProxy === true ? 0 : forwarded.length - trustProxy;
+      if (index >= 0 && forwarded[index]) return forwarded[index];
+    }
+    return req.socket.remoteAddress || 'inconnue';
+  };
 
   const currentToken = (req) => auth.parseCookies(req.headers.cookie)[SESSION_COOKIE];
   const currentUser = (req) => users?.userForToken(currentToken(req)) ?? null;
@@ -342,7 +357,11 @@ if (require.main === module) {
           maxUsers: Number(process.env.MAX_USERS) || 1_000,
         });
 
-  const server = createServer(pool, { users, harvester, trustProxy: process.env.TRUST_PROXY === 'true' });
+  // TRUST_PROXY : « true » (première valeur de X-Forwarded-For) ou un nombre de proxys de confiance (1, 2…).
+  const proxy = process.env.TRUST_PROXY ?? '';
+  const trustProxy = proxy === 'true' ? true : /^[1-9]\d?$/.test(proxy) ? Number(proxy) : false;
+
+  const server = createServer(pool, { users, harvester, trustProxy });
   server.listen(port, '0.0.0.0', () => console.log(`FindMyMovie écoute sur le port ${port}`));
   // Arrêt propre quand Docker envoie SIGTERM.
   for (const signal of ['SIGINT', 'SIGTERM']) {

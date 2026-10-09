@@ -88,10 +88,70 @@ et dans le `.env` de FindMyMovie :
 
 ```
 BIND_ADDRESS=127.0.0.1
-TRUST_PROXY=true
+TRUST_PROXY=1
 ```
 
-`TRUST_PROXY=true` fait lire l'adresse du joueur dans `X-Forwarded-For` (limitation des tentatives de connexion) et marque le cookie de session `Secure`. À n'activer que si l'appli n'est joignable **que** par le proxy (`BIND_ADDRESS=127.0.0.1`) : sinon n'importe qui pourrait falsifier cet en-tête.
+`TRUST_PROXY=1` fait lire l'adresse du joueur dans `X-Forwarded-For` (limitation des tentatives de connexion) et marque le cookie de session `Secure`. À n'activer que si l'appli n'est joignable **que** par le proxy (`BIND_ADDRESS=127.0.0.1`) : sinon n'importe qui pourrait falsifier cet en-tête.
+
+### Avec nginx et Cloudflare
+
+```
+visiteur ──► Cloudflare ──HTTPS──► nginx ──HTTP──► FindMyMovie (127.0.0.1:9601)
+```
+
+Les fichiers prêts à l'emploi sont dans `deploy/nginx/`. La configuration a été testée avec un vrai nginx devant l'appli.
+
+**1. Cloudflare (tableau de bord)**
+
+- DNS : un enregistrement `A` pour le sous-domaine, vers l'IP du serveur, avec le nuage orange (proxifié).
+- SSL/TLS : mode **Complet (strict)** (pas « Flexible », qui ferait circuler les mots de passe en clair entre Cloudflare et ton serveur).
+- SSL/TLS > Serveur d'origine > **Créer un certificat**, puis enregistre-le sur le serveur :
+
+```bash
+sudo mkdir -p /etc/ssl/cloudflare
+sudo nano /etc/ssl/cloudflare/findmymovie.pem    # coller le certificat
+sudo nano /etc/ssl/cloudflare/findmymovie.key    # coller la clé privée
+sudo chmod 600 /etc/ssl/cloudflare/findmymovie.key
+```
+
+**2. FindMyMovie** : dans le `.env` à côté du `docker-compose.yml` :
+
+```
+BIND_ADDRESS=127.0.0.1
+TRUST_PROXY=1
+```
+
+puis `docker compose up -d --build`.
+
+**3. nginx**
+
+```bash
+cd FindMyMovie
+# a) la liste des adresses Cloudflare (crée /etc/nginx/cloudflare-realip.conf)
+sudo ./deploy/nginx/update-cloudflare-ips.sh
+# b) la configuration du site : remplace findmymovie.exemple.fr par ton domaine (2 fois)
+sudo cp deploy/nginx/findmymovie.conf /etc/nginx/conf.d/findmymovie.conf
+sudo nano /etc/nginx/conf.d/findmymovie.conf
+# c) vérifier et recharger
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Pour garder la liste des adresses Cloudflare à jour (elle change rarement), une tâche hebdomadaire :
+
+```bash
+printf 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n0 4 * * 1 root %s/deploy/nginx/update-cloudflare-ips.sh\n' "$PWD" \
+  | sudo tee /etc/cron.d/findmymovie-cloudflare-ips
+```
+
+Ce que la configuration garantit :
+
+- l'adresse du visiteur vient de `CF-Connecting-IP`, **uniquement** si la connexion arrive d'une adresse Cloudflare : quelqu'un qui contournerait Cloudflare ne peut pas usurper une adresse ;
+- nginx **écrase** `X-Forwarded-For` au lieu de le compléter, et l'appli ne lit que la dernière valeur (`TRUST_PROXY=1`) : ce qu'écrit le visiteur n'arrive jamais jusqu'à elle ;
+- `Host` est transmis tel quel (indispensable à la protection CSRF), le cookie de session est marqué `Secure`, et les requêtes de plus de 16 Ko sont refusées par nginx.
+
+Pour aller plus loin, ne laisse entrer le port 443 que depuis les [adresses Cloudflare](https://www.cloudflare.com/ips/) avec le pare-feu du serveur.
+
+Si tu vois l'ancienne version du site après une mise à jour, purge le cache dans Cloudflare (Caching > Purge Everything). Si la page s'affiche mal, désactive **Rocket Loader** (Speed > Optimization) : il modifie les scripts, ce que la politique de sécurité de l'appli (CSP) n'accepte pas.
 
 **Sauvegarde et restauration des comptes**
 
@@ -138,7 +198,7 @@ npm test       # tests de l'analyse Wikiquote, du moissonneur, des comptes et de
 | `WIKIQUOTE_INTERVAL_MS` | `5000` | Pause entre deux requêtes à Wikiquote |
 | `ACCOUNTS_ENABLED` | `true` | `false` : pas de comptes, le jeu fonctionne comme avant |
 | `MAX_USERS` | `1000` | Nombre maximal de comptes (les inscriptions se ferment ensuite) |
-| `TRUST_PROXY` | `false` | `true` derrière un reverse proxy de confiance : l'adresse du joueur est lue dans `X-Forwarded-For` (déjà réglé pour Render) |
+| `TRUST_PROXY` | `false` | Derrière un reverse proxy de confiance : `1` (un proxy : nginx, Caddy…), `2`… (plusieurs), ou `true` (première valeur de `X-Forwarded-For`, déjà réglé pour Render). L'adresse du joueur est lue dans `X-Forwarded-For` ; avec un nombre N, on prend la N-ième valeur depuis la droite, que les valeurs écrites par le visiteur ne peuvent pas falsifier |
 
 Derrière un proxy d'entreprise, Node ≥ 22.21 sait l'utiliser avec `NODE_USE_ENV_PROXY=1`.
 
