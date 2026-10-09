@@ -15,7 +15,7 @@ Les répliques viennent de deux sources :
 docker compose up --build
 ```
 
-Puis ouvre <http://localhost:3000>.
+Puis ouvre <http://localhost:9601>.
 
 Pour changer le port d'écoute : `PORT=8080 docker compose up --build`.
 
@@ -23,7 +23,7 @@ Sans Compose :
 
 ```bash
 docker build -t findmymovie .
-docker run --rm -p 3000:3000 -v findmymovie-data:/data findmymovie
+docker run --rm -p 9601:9601 -v findmymovie-data:/data findmymovie
 ```
 
 Le volume `/data` conserve les répliques déjà récoltées : sans lui, tout est récolté à nouveau à chaque démarrage.
@@ -42,7 +42,7 @@ cd FindMyMovie
 docker compose up -d --build
 ```
 
-L'appli est alors sur `http://IP_DU_SERVEUR:3000` (pense à ouvrir le port dans le pare-feu).
+L'appli est alors sur `http://IP_DU_SERVEUR:9601` (pense à ouvrir le port dans le pare-feu).
 
 **Mise à jour** (les comptes et le cache sont dans le volume `findmymovie_findmymovie-data` : ils survivent)
 
@@ -71,7 +71,7 @@ BIND_ADDRESS=0.0.0.0
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `PORT` | `3000` | Port publié sur le serveur |
+| `PORT` | `9601` | Port publié sur le serveur |
 | `BIND_ADDRESS` | `0.0.0.0` | `127.0.0.1` pour n'accepter que les connexions venant du serveur lui-même (reverse proxy) |
 | `TRUST_PROXY` | `false` | voir ci-dessous |
 | `ACCOUNTS_ENABLED`, `WIKIQUOTE_ENABLED` | `true` | voir « Configuration » |
@@ -80,7 +80,7 @@ BIND_ADDRESS=0.0.0.0
 
 ```
 findmymovie.exemple.fr {
-    reverse_proxy 127.0.0.1:3000
+    reverse_proxy 127.0.0.1:9601
 }
 ```
 
@@ -124,7 +124,7 @@ N'importe quel hébergeur de conteneurs convient : l'image écoute sur `$PORT`, 
 Node.js ≥ 20 suffit, il n'y a rien à installer :
 
 ```bash
-npm start      # http://localhost:3000 (cache dans ./cache)
+npm start      # http://localhost:9601 (cache dans ./cache)
 npm test       # tests de l'analyse Wikiquote, du moissonneur, des comptes et de l'API
 ```
 
@@ -132,7 +132,7 @@ npm test       # tests de l'analyse Wikiquote, du moissonneur, des comptes et de
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `PORT` | `3000` | Port d'écoute |
+| `PORT` | `9601` | Port d'écoute |
 | `DATA_DIR` | `./cache` (`/data` dans Docker) | Dossier du cache des répliques récoltées |
 | `WIKIQUOTE_ENABLED` | `true` | `false` : plus aucun appel à Wikiquote (le cache déjà récolté reste utilisé) |
 | `WIKIQUOTE_INTERVAL_MS` | `5000` | Pause entre deux requêtes à Wikiquote |

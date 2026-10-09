@@ -313,7 +313,7 @@ function createServer(pool = new QuotePool(quotes.load()), { users = null, harve
 module.exports = { createServer };
 
 if (require.main === module) {
-  const port = Number(process.env.PORT) || 3000;
+  const port = Number(process.env.PORT) || 9601;
   const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'cache');
   const pool = new QuotePool(quotes.load());
 
