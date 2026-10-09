@@ -30,6 +30,81 @@ Le volume `/data` conserve les répliques déjà récoltées : sans lui, tout es
 
 L'image est basée sur `node:22-alpine`, ne contient aucune dépendance npm et s'exécute avec l'utilisateur non-root `node` (le `docker-compose.yml` ajoute système de fichiers en lecture seule et suppression des capabilities).
 
+## Installer sur un serveur
+
+Il faut un serveur Linux avec `git`, Docker et le plugin Compose (`docker compose version`).
+
+**Première installation**
+
+```bash
+git clone https://github.com/FreedomFR/FindMyMovie.git
+cd FindMyMovie
+docker compose up -d --build
+```
+
+L'appli est alors sur `http://IP_DU_SERVEUR:3000` (pense à ouvrir le port dans le pare-feu).
+
+**Mise à jour** (les comptes et le cache sont dans le volume `findmymovie_findmymovie-data` : ils survivent)
+
+```bash
+cd FindMyMovie
+git pull
+docker compose up -d --build
+```
+
+**Commandes utiles**
+
+```bash
+docker compose logs -f          # journaux en direct
+docker compose ps               # état (healthy ?)
+docker compose restart          # redémarrer
+docker compose down             # arrêter, en gardant les données
+docker compose down -v          # arrêter ET supprimer les comptes et le cache
+```
+
+**Réglages** : crée un fichier `.env` à côté du `docker-compose.yml` (lu automatiquement), par exemple :
+
+```
+PORT=8080
+BIND_ADDRESS=0.0.0.0
+```
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `PORT` | `3000` | Port publié sur le serveur |
+| `BIND_ADDRESS` | `0.0.0.0` | `127.0.0.1` pour n'accepter que les connexions venant du serveur lui-même (reverse proxy) |
+| `TRUST_PROXY` | `false` | voir ci-dessous |
+| `ACCOUNTS_ENABLED`, `WIKIQUOTE_ENABLED` | `true` | voir « Configuration » |
+
+**HTTPS (fortement conseillé dès qu'il y a des comptes)** : en HTTP simple, les mots de passe circulent en clair. Le plus simple est un reverse proxy qui gère le certificat, par exemple [Caddy](https://caddyserver.com/) (certificat Let's Encrypt automatique) avec ce `Caddyfile` :
+
+```
+findmymovie.exemple.fr {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+et dans le `.env` de FindMyMovie :
+
+```
+BIND_ADDRESS=127.0.0.1
+TRUST_PROXY=true
+```
+
+`TRUST_PROXY=true` fait lire l'adresse du joueur dans `X-Forwarded-For` (limitation des tentatives de connexion) et marque le cookie de session `Secure`. À n'activer que si l'appli n'est joignable **que** par le proxy (`BIND_ADDRESS=127.0.0.1`) : sinon n'importe qui pourrait falsifier cet en-tête.
+
+**Sauvegarde et restauration des comptes**
+
+```bash
+# sauvegarde (crée findmymovie-data.tgz dans le dossier courant)
+docker run --rm -v findmymovie_findmymovie-data:/data -v "$PWD":/backup node:22-alpine \
+  tar czf /backup/findmymovie-data.tgz -C /data .
+
+# restauration (application arrêtée : docker compose down)
+docker run --rm -v findmymovie_findmymovie-data:/data -v "$PWD":/backup node:22-alpine \
+  sh -c 'tar xzf /backup/findmymovie-data.tgz -C /data && chown -R node:node /data'
+```
+
 ## Déployer en ligne (Render)
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/FreedomFR/FindMyMovie)

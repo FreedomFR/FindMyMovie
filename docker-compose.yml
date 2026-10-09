@@ -4,7 +4,8 @@ services:
     image: findmymovie
     container_name: findmymovie
     ports:
-      - "${PORT:-3000}:3000"
+      # BIND_ADDRESS=127.0.0.1 pour n'exposer l'appli qu'à un reverse proxy installé sur la même machine.
+      - "${BIND_ADDRESS:-0.0.0.0}:${PORT:-3000}:3000"
     restart: unless-stopped
     environment:
       # Mettre à "false" pour jouer uniquement avec les répliques embarquées (hors ligne).
