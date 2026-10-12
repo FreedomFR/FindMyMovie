@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { QuotePool, createFileStore } = require('../src/pool');
+const { getEventListeners } = require('node:events');
 const { createHarvester, defaultSleep } = require('../src/harvester');
 const { WikiquoteError } = require('../src/wikiquote');
 
@@ -222,6 +223,12 @@ test("la pause s'interrompt à l'arrêt, qu'il survienne avant ou pendant l'atte
   await pending; // arrêt demandé pendant la pause
 
   assert.ok(Date.now() - started < 1000);
+});
+
+test("une pause terminée ne laisse aucun écouteur sur le signal d'arrêt (il vit autant que la moisson)", async () => {
+  const lifetime = new AbortController();
+  for (let i = 0; i < 200; i += 1) await defaultSleep(1, lifetime.signal);
+  assert.equal(getEventListeners(lifetime.signal, 'abort').length, 0);
 });
 
 test('stop() interrompt immédiatement une attente en cours', async () => {

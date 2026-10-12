@@ -2,12 +2,9 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { pickRandom } = require('./quotes');
+const { countriesOf, pickRandom } = require('./quotes');
 
 const dedupeKey = (r) => `${r.quote.toLowerCase().replace(/\s+/g, ' ')}|${r.title.toLowerCase()}`;
-
-/** Les pays d'origine d'un film : une coproduction en a plusieurs, séparés par « / ». Aucun si on ne les connaît pas. */
-const countriesOf = (record) => (record.country ? record.country.split(' / ') : []);
 
 /** L'ensemble des répliques jouables : le jeu de départ, puis ce que le moissonneur ajoute. */
 class QuotePool {
@@ -60,8 +57,14 @@ class QuotePool {
 
   /** Première et dernière année de sortie présentes dans le réservoir. */
   bounds() {
-    const years = this.records.map((r) => r.year).filter(Number.isInteger);
-    return years.length ? { min: Math.min(...years), max: Math.max(...years) } : null;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const { year } of this.records) {
+      if (!Number.isInteger(year)) continue;
+      if (year < min) min = year;
+      if (year > max) max = year;
+    }
+    return min <= max ? { min, max } : null;
   }
 
   /** Nombre de répliques par année de sortie, parmi les pays demandés (tous, par défaut). */

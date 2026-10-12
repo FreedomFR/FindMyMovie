@@ -13,20 +13,16 @@ const els = {
   error: $('error'),
   hintsUsed: $('hints-used'),
   total: $('total'),
-  // période
-  period: $('period'),
-  periodLabel: $('period-label'),
-  periodCount: $('period-count'),
-  periodForm: $('period-form'),
-  periodError: $('period-error'),
+  // filtres
+  filters: $('filters'),
+  filtersSummary: $('filters-summary'),
+  filtersCount: $('filters-count'),
+  filtersForm: $('filters-form'),
+  filtersError: $('filters-error'),
+  filtersReset: $('filters-reset'),
   presets: $('presets'),
   yearFrom: $('year-from'),
   yearTo: $('year-to'),
-  // pays
-  countriesPanel: $('countries'),
-  countriesLabel: $('countries-label'),
-  countriesCount: $('countries-count'),
-  countriesForm: $('countries-form'),
   countryChips: $('country-chips'),
   // compte
   loginOpen: $('login-open'),
@@ -61,9 +57,10 @@ const MAX_COUNTRIES = 40; // comme côté serveur
 const COUNTRY_PATTERN = /^\p{L}[\p{L} '’-]{0,39}$/u; // idem
 // On n'envoie au serveur que les dernières répliques vues (l'URL doit rester courte).
 const MAX_EXCLUDED = 150;
-const MIN_YEAR = 1888;
-const MAX_YEAR = 2100;
-// Période sans film : la moisson cherche en arrière-plan, on réessaie quelques fois toute seule.
+// Les bornes des années ont une seule source : les champs du formulaire.
+const MIN_YEAR = Number(els.yearFrom.min);
+const MAX_YEAR = Number(els.yearFrom.max);
+// Filtres sans film : la moisson cherche en arrière-plan, on réessaie quelques fois toute seule.
 const EMPTY_RETRY_MS = 8_000;
 const EMPTY_RETRY_MAX = 8;
 
@@ -76,19 +73,19 @@ const PRESETS = [
   { label: '2010 et après', from: 2010, to: null },
 ];
 
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
 const state = {
-  current: null, // { id, quote, hints }
+  current: null, // { id, hintCount, countries } : la réplique en cours et le filtre de pays avec lequel elle a été tirée
   revealedHints: 0,
   totalHintsUsed: 0,
   round: 0,
   busy: false,
   refreshQueued: false,
   seen: loadSeen(),
-  range: loadRange(), // { from, to } ; null = pas de borne
-  countries: loadCountries(), // pays choisis ; vide = tous (aucun filtre)
-  countryList: [], // pays proposés par le serveur : [{ name, count }]
+  filters: loadFilters(), // { from, to, countries } ; null = pas de borne, [] = tous les pays (aucun filtre)
   pendingCountries: new Set(), // sélection en cours dans le panneau, avant « Appliquer »
-  bounds: null, // années disponibles côté serveur
+  countryList: [], // pays proposés à l'ouverture du panneau : [{ name, count }]
   emptyRetries: 0,
   retryTimer: null,
   accountsEnabled: false,
@@ -98,60 +95,76 @@ const state = {
 
 // ---- stockage local (jamais indispensable) -------------------------------------------------
 
+// `area` : 'local' ou 'session'. On accède au stockage DANS le try : l'accès seul peut lever (navigation privée…).
+function readStored(area, key) {
+  try {
+    return JSON.parse(window[`${area}Storage`].getItem(key));
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(area, key, value) {
+  try {
+    window[`${area}Storage`].setItem(key, JSON.stringify(value));
+  } catch {
+    // Stockage indisponible : on continue sans.
+  }
+}
+
 function loadSeen() {
-  try {
-    const parsed = JSON.parse(sessionStorage.getItem(SEEN_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
-  } catch {
-    return [];
-  }
+  const stored = readStored('session', SEEN_KEY);
+  return Array.isArray(stored) ? stored.filter((id) => typeof id === 'string').slice(-MAX_EXCLUDED) : [];
 }
 
-function saveSeen() {
-  try {
-    sessionStorage.setItem(SEEN_KEY, JSON.stringify(state.seen.slice(-MAX_EXCLUDED)));
-  } catch {
-    // Stockage indisponible (navigation privée…) : on continue sans.
-  }
+function loadFilters() {
+  const range = readStored('local', RANGE_KEY);
+  const validYear = (y) => y === null || (Number.isInteger(y) && y >= MIN_YEAR && y <= MAX_YEAR);
+  const validRange = range && validYear(range.from) && validYear(range.to);
+
+  // Un nom que le serveur refuserait (400) bloquerait le jeu : on ne garde que les noms bien formés.
+  const names = readStored('local', COUNTRIES_KEY);
+  const countries = Array.isArray(names)
+    ? [...new Set(names.filter((name) => typeof name === 'string' && COUNTRY_PATTERN.test(name)))].slice(0, MAX_COUNTRIES)
+    : [];
+
+  return { from: validRange ? range.from : null, to: validRange ? range.to : null, countries };
 }
 
-function loadRange() {
-  const none = { from: null, to: null };
-  try {
-    const stored = JSON.parse(localStorage.getItem(RANGE_KEY) || 'null');
-    const valid = (y) => y === null || (Number.isInteger(y) && y >= MIN_YEAR && y <= MAX_YEAR);
-    return stored && valid(stored.from) && valid(stored.to) ? { from: stored.from, to: stored.to } : none;
-  } catch {
-    return none;
-  }
+// ---- petits outils DOM ---------------------------------------------------------------------
+
+/** Crée un élément. Les chaînes passées en contenu deviennent des nœuds texte, jamais du HTML. */
+function el(tag, className, ...content) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  node.append(...content);
+  return node;
 }
 
-function saveRange() {
-  try {
-    localStorage.setItem(RANGE_KEY, JSON.stringify(state.range));
-  } catch {
-    // idem
-  }
+function button(className, text, onClick) {
+  const node = el('button', className, text);
+  node.type = 'button';
+  node.addEventListener('click', onClick);
+  return node;
 }
 
-function loadCountries() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(COUNTRIES_KEY) || '[]');
-    if (!Array.isArray(stored)) return [];
-    // Un nom que le serveur refuserait (400) bloquerait le jeu : on ne garde que les noms bien formés.
-    const names = stored.filter((name) => typeof name === 'string' && COUNTRY_PATTERN.test(name));
-    return [...new Set(names)].slice(0, MAX_COUNTRIES);
-  } catch {
-    return [];
-  }
+function showMessage(node, message) {
+  node.textContent = message;
+  node.hidden = !message;
 }
 
-function saveCountries() {
-  try {
-    localStorage.setItem(COUNTRIES_KEY, JSON.stringify(state.countries));
-  } catch {
-    // idem
-  }
+const showError = (message) => showMessage(els.error, message);
+
+/** Un léger fondu à l'arrivée d'un contenu, sauf si le système demande de réduire les animations. */
+function animateIn(node) {
+  if (reducedMotion.matches || !node.animate) return;
+  node.animate(
+    [
+      { opacity: 0, transform: 'translateY(6px)' },
+      { opacity: 1, transform: 'none' },
+    ],
+    { duration: 220, easing: 'ease-out' },
+  );
 }
 
 // ---- réseau --------------------------------------------------------------------------------
@@ -179,11 +192,6 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
-function showError(message) {
-  els.error.textContent = message;
-  els.error.hidden = !message;
-}
-
 function setBusy(busy) {
   state.busy = busy;
   els.reveal.disabled = busy || !state.current || !els.answer.hidden;
@@ -194,35 +202,39 @@ function setBusy(busy) {
   }
 }
 
-// ---- période -------------------------------------------------------------------------------
+// ---- filtres : période et pays -------------------------------------------------------------
 
-const isRangeActive = () => state.range.from !== null || state.range.to !== null;
+const isRangeActive = ({ from, to }) => from !== null || to !== null;
+const isFilterActive = ({ from, to, countries }) => from !== null || to !== null || countries.length > 0;
 
+/** La période choisie, en toutes lettres (à n'appeler que s'il y a une borne). */
 function rangeLabel({ from, to }) {
-  if (from === null && to === null) return 'toutes les années';
   if (from === null) return `jusqu'en ${to}`;
   if (to === null) return `depuis ${from}`;
   return from === to ? `${from} uniquement` : `${from} – ${to}`;
 }
 
-function buildPresets() {
-  for (const preset of PRESETS) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'chip';
-    button.textContent = preset.label;
-    button.addEventListener('click', () => applyRange({ from: preset.from, to: preset.to }));
-    els.presets.append(button);
-  }
+const countriesLabel = (names) => (names.length <= 3 ? names.join(', ') : `${names.length} pays`);
+
+/** Le filtre sous forme de paramètres d'URL ; ce qui n'est pas filtré n'y figure pas. */
+function filterParams({ from, to, countries }) {
+  const params = new URLSearchParams();
+  if (from !== null) params.set('from', from);
+  if (to !== null) params.set('to', to);
+  if (countries.length > 0) params.set('countries', countries.join(','));
+  return params;
 }
 
-function renderRange() {
-  els.periodLabel.textContent = rangeLabel(state.range);
-  els.yearFrom.value = state.range.from ?? '';
-  els.yearTo.value = state.range.to ?? '';
-  [...els.presets.children].forEach((button, i) => {
+function renderFilters() {
+  const filters = state.filters;
+  const active = [];
+  if (isRangeActive(filters)) active.push(rangeLabel(filters));
+  if (filters.countries.length > 0) active.push(countriesLabel(filters.countries));
+  els.filtersSummary.textContent = active.join(' · ') || 'aucun';
+  els.filters.dataset.active = String(isFilterActive(filters));
+  [...els.presets.children].forEach((chip, i) => {
     const { from, to } = PRESETS[i];
-    button.setAttribute('aria-pressed', String(from === state.range.from && to === state.range.to));
+    chip.setAttribute('aria-pressed', String(from === filters.from && to === filters.to));
   });
 }
 
@@ -235,72 +247,13 @@ function parseYear(input) {
   return year;
 }
 
-function applyRange({ from, to }) {
-  if (from !== null && to !== null && from > to) [from, to] = [to, from];
-  state.range = { from, to };
-  state.emptyRetries = 0;
-  saveRange();
-  renderRange();
-  els.periodError.hidden = true;
-  els.period.open = false;
-  nextQuote();
-}
-
-function updateCounts(data) {
-  els.total.textContent = String(data.total);
-  state.bounds = data.bounds;
-  if (data.bounds) {
-    els.yearFrom.placeholder = String(data.bounds.min);
-    els.yearTo.placeholder = String(data.bounds.max);
-  }
-  const matching = `· ${data.inRange} réplique${data.inRange > 1 ? 's' : ''}`;
-  els.periodCount.textContent = isRangeActive() ? matching : '';
-  els.countriesCount.textContent = isCountryFilterActive() ? matching : '';
-
-  state.countryList = data.countries ?? [];
-  // Les pastilles ne sont pas reconstruites pendant que le joueur choisit (il perdrait le focus) ; vides, elles n'ont rien à perdre.
-  if (els.countriesPanel.open && !els.countryChips.hasChildNodes()) renderCountryChips();
-}
-
-// ---- pays ----------------------------------------------------------------------------------
-
-const isCountryFilterActive = () => state.countries.length > 0;
-
-function countriesLabel(names) {
-  if (names.length === 0) return 'tous';
-  return names.length <= 3 ? names.join(', ') : `${names.length} pays`;
-}
-
-function renderCountries() {
-  els.countriesLabel.textContent = countriesLabel(state.countries);
-}
-
-/** Les pays proposés : ceux du serveur, plus ceux déjà choisis qui n'ont aucune réplique dans la période. */
-function countryOptions() {
-  const options = [...state.countryList];
-  for (const name of state.countries) {
-    if (!options.some((option) => option.name === name)) options.push({ name, count: 0 });
-  }
-  return options;
-}
-
-/** Rien à filtrer : aucun pays choisi, ou tous ceux qui sont proposés. */
-function coversAllCountries(selection) {
-  return selection.size === 0 || countryOptions().every(({ name }) => selection.has(name));
-}
-
-function countryChip(label, onClick) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'chip';
-  button.textContent = label;
-  button.addEventListener('click', onClick);
-  return button;
-}
+/** Aucun filtre de pays : rien de coché, ou tous les pays proposés (qui sont alors équivalents à « tous »). */
+const coversAllCountries = () =>
+  state.pendingCountries.size === 0 || state.pendingCountries.size === state.countryList.length;
 
 /** « Tous » est allumée quand rien n'est filtré ; les autres pastilles reflètent la sélection en cours. */
 function syncCountryChips() {
-  const everything = coversAllCountries(state.pendingCountries);
+  const everything = coversAllCountries();
   for (const chip of els.countryChips.children) {
     const pressed = chip.dataset.country === undefined ? everything : state.pendingCountries.has(chip.dataset.country);
     chip.setAttribute('aria-pressed', String(pressed));
@@ -308,12 +261,12 @@ function syncCountryChips() {
 }
 
 function renderCountryChips() {
-  const all = countryChip('Tous', () => {
+  const all = button('chip', 'Tous', () => {
     state.pendingCountries.clear();
     syncCountryChips();
   });
-  const chips = countryOptions().map(({ name, count }) => {
-    const chip = countryChip(`${name} (${count})`, () => {
+  const chips = state.countryList.map(({ name, count }) => {
+    const chip = button('chip', `${name} (${count})`, () => {
       if (!state.pendingCountries.delete(name)) state.pendingCountries.add(name);
       syncCountryChips();
     });
@@ -324,133 +277,154 @@ function renderCountryChips() {
   syncCountryChips();
 }
 
-function applyCountries() {
+const countryNotice = (text) => el('span', 'muted small', text);
+
+/** À l'ouverture du panneau : la liste des pays de la période, avec leurs effectifs du moment (la moisson les fait évoluer). */
+async function loadCountryList() {
+  state.countryList = [];
+  try {
+    const { from, to } = state.filters;
+    const { countries } = await api(`/api/countries?${filterParams({ from, to, countries: [...state.pendingCountries] })}`);
+    if (!els.filters.open) return; // refermé entre-temps
+    state.countryList = countries;
+    renderCountryChips();
+  } catch {
+    if (els.filters.open) els.countryChips.replaceChildren(countryNotice('Liste des pays indisponible pour le moment.'));
+  }
+}
+
+/** Le formulaire repart de ce qui est appliqué. */
+function openFilters() {
+  els.yearFrom.value = state.filters.from ?? '';
+  els.yearTo.value = state.filters.to ?? '';
+  state.pendingCountries = new Set(state.filters.countries);
+  showMessage(els.filtersError, '');
+  loadCountryList();
+}
+
+function applyFilters() {
+  let from;
+  let to;
+  try {
+    from = parseYear(els.yearFrom);
+    to = parseYear(els.yearTo);
+  } catch (error) {
+    return showMessage(els.filtersError, error.message);
+  }
+  if (from !== null && to !== null && from > to) [from, to] = [to, from];
   // Tout choisir revient à ne rien filtrer : les films dont on ne connaît pas le pays restent alors possibles.
-  state.countries = coversAllCountries(state.pendingCountries) ? [] : [...state.pendingCountries].slice(0, MAX_COUNTRIES);
+  const countries = coversAllCountries() ? [] : [...state.pendingCountries].slice(0, MAX_COUNTRIES);
+
+  state.filters = { from, to, countries };
   state.emptyRetries = 0;
-  saveCountries();
-  renderCountries();
-  els.countriesPanel.open = false;
+  writeStored('local', RANGE_KEY, { from, to });
+  writeStored('local', COUNTRIES_KEY, countries);
+  renderFilters();
+  showMessage(els.filtersError, '');
+  els.filters.open = false;
   nextQuote();
+}
+
+function buildPresets() {
+  els.presets.append(
+    ...PRESETS.map(({ label, from, to }) =>
+      button('chip', label, () => {
+        els.yearFrom.value = from ?? '';
+        els.yearTo.value = to ?? '';
+        applyFilters();
+      }),
+    ),
+  );
+}
+
+function updateCounts(data) {
+  els.total.textContent = String(data.total);
+  if (data.bounds) {
+    els.yearFrom.placeholder = String(data.bounds.min);
+    els.yearTo.placeholder = String(data.bounds.max);
+  }
+  els.filtersCount.textContent = isFilterActive(state.filters) ? `· ${data.inRange} réplique${data.inRange > 1 ? 's' : ''}` : '';
 }
 
 // ---- indices et réponse --------------------------------------------------------------------
 
 function renderHints(hints) {
-  els.hints.replaceChildren();
-  for (const hint of hints) {
-    const li = document.createElement('li');
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'hint';
-    button.dataset.key = hint.key;
-
-    const label = document.createElement('span');
-    label.className = 'hint-label';
-    label.textContent = hint.label;
-    const value = document.createElement('span');
-    value.className = 'hint-value hidden';
-    value.textContent = '???';
-    // Le texte de l'indice est lu par les lecteurs d'écran quand il change.
-    value.setAttribute('aria-live', 'polite');
-
-    button.append(label, value);
-    button.addEventListener('click', () => revealHint(button, value));
-    li.append(button);
-    els.hints.append(li);
-  }
+  els.hints.replaceChildren(
+    ...hints.map((hint) => {
+      const value = el('span', 'hint-value hidden', '???');
+      value.setAttribute('aria-live', 'polite'); // lu par les lecteurs d'écran quand il change
+      const tile = button('hint', '', () => revealHint(tile, value));
+      tile.dataset.key = hint.key;
+      tile.append(el('span', 'hint-label', hint.label), value);
+      return el('li', '', tile);
+    }),
+  );
 }
 
-async function revealHint(button, valueEl) {
-  if (state.busy || button.classList.contains('revealed')) return;
+/** Interroge le serveur sur la réplique en cours ; la réponse est ignorée si le joueur est déjà passé à la suivante. */
+async function askAboutCurrent(path, onData, failureMessage) {
   const quoteId = state.current.id;
   setBusy(true);
   showError('');
   try {
-    const hint = await api(`/api/quote/${quoteId}/hint/${encodeURIComponent(button.dataset.key)}`);
-    if (state.current?.id !== quoteId) return; // l'utilisateur est déjà passé à la suite
-    valueEl.textContent = hint.value;
-    valueEl.classList.remove('hidden');
-    button.classList.add('revealed');
-    button.setAttribute('aria-label', `${hint.label} : ${hint.value}`);
-    state.revealedHints += 1;
-    state.totalHintsUsed += 1;
-    els.hintsUsed.textContent = String(state.totalHintsUsed);
+    const data = await api(`/api/quote/${quoteId}/${path}`);
+    if (state.current?.id === quoteId) onData(data);
   } catch {
-    showError("Impossible de récupérer l'indice. Réessaie dans un instant.");
+    showError(failureMessage);
   } finally {
     setBusy(false);
   }
 }
 
-async function revealAnswer() {
+function revealHint(tile, valueEl) {
+  if (state.busy || tile.classList.contains('revealed')) return;
+  return askAboutCurrent(
+    `hint/${encodeURIComponent(tile.dataset.key)}`,
+    (hint) => {
+      valueEl.textContent = hint.value;
+      valueEl.classList.remove('hidden');
+      tile.classList.add('revealed');
+      tile.setAttribute('aria-label', `${hint.label} : ${hint.value}`);
+      state.revealedHints += 1;
+      state.totalHintsUsed += 1;
+      els.hintsUsed.textContent = String(state.totalHintsUsed);
+    },
+    "Impossible de récupérer l'indice. Réessaie dans un instant.",
+  );
+}
+
+function revealAnswer() {
   if (state.busy || !state.current) return;
-  const quoteId = state.current.id;
-  setBusy(true);
-  showError('');
-  try {
-    const answer = await api(`/api/quote/${quoteId}/answer`);
-    if (state.current?.id !== quoteId) return;
-    renderAnswer(answer);
-  } catch {
-    showError('Impossible de récupérer la réponse. Réessaie dans un instant.');
-  } finally {
-    setBusy(false);
-  }
-}
-
-function paragraph(className, ...content) {
-  const p = document.createElement('p');
-  p.className = className;
-  p.append(...content);
-  return p;
+  return askAboutCurrent('answer', renderAnswer, 'Impossible de récupérer la réponse. Réessaie dans un instant.');
 }
 
 function sourceLink(source) {
-  const a = document.createElement('a');
-  a.href = source.url;
-  a.target = '_blank';
-  a.rel = 'noopener noreferrer';
-  a.textContent = `${source.name} (CC BY-SA 4.0)`;
-  return paragraph('used', 'Source : ', a);
+  const link = el('a', '', `${source.name} (CC BY-SA 4.0)`);
+  link.href = source.url;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  return el('p', 'used', 'Source : ', link);
 }
 
 function loginNudge() {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'link';
-  button.textContent = 'Connecte-toi';
-  button.addEventListener('click', openAuth);
-  return paragraph('used', 'Envie de garder ton historique ? ', button, ' (facultatif).');
+  return el('p', 'used', 'Envie de garder ton historique ? ', button('link', 'Connecte-toi', openAuth), ' (facultatif).');
 }
 
 function renderAnswer(answer) {
-  const title = document.createElement('h2');
-  title.textContent = answer.title;
-
-  const list = document.createElement('dl');
-  for (const detail of answer.details) {
-    const dt = document.createElement('dt');
-    dt.textContent = detail.label;
-    const dd = document.createElement('dd');
-    dd.textContent = detail.value;
-    list.append(dt, dd);
-  }
-
-  const used = paragraph(
-    'used',
+  const used =
     state.revealedHints === 0
       ? 'Aucun indice utilisé : bien joué !'
-      : `Indices utilisés : ${state.revealedHints} / ${state.current.hints.length}`,
-  );
-
-  const parts = [title, list, used];
+      : `Indices utilisés : ${state.revealedHints} / ${state.current.hintCount}`;
+  const parts = [
+    el('h2', '', answer.title),
+    el('dl', '', ...answer.details.flatMap(({ label, value }) => [el('dt', '', label), el('dd', '', value)])),
+    el('p', 'used', used),
+  ];
   if (answer.source?.url) parts.push(sourceLink(answer.source));
 
   let resultBox = null;
   if (state.user) {
-    resultBox = document.createElement('div');
-    resultBox.className = 'result';
+    resultBox = el('div', 'result');
     parts.push(resultBox);
   } else if (state.accountsEnabled) {
     parts.push(loginNudge());
@@ -459,25 +433,30 @@ function renderAnswer(answer) {
   els.answer.replaceChildren(...parts);
   els.answer.hidden = false;
   els.hintsSection.hidden = true; // tout est déjà dans la fiche
-  els.reveal.disabled = true;
   els.next.classList.add('emphasis');
+  // Sur un petit écran la fiche peut tomber sous le pli : on la ramène à l'écran.
+  els.answer.scrollIntoView({ block: 'nearest', behavior: reducedMotion.matches ? 'auto' : 'smooth' });
 
   if (resultBox) recordPlay(resultBox);
 }
 
 // ---- enchaînement des répliques ------------------------------------------------------------
 
+function clearAnswer() {
+  els.answer.hidden = true;
+  els.answer.replaceChildren();
+  els.next.classList.remove('emphasis');
+}
+
 function showEmpty() {
   state.current = null;
   els.quote.hidden = true;
   els.hintsSection.hidden = true;
-  els.answer.hidden = true;
-  els.answer.replaceChildren();
-  els.next.classList.remove('emphasis');
+  clearAnswer();
 
   const filters = [];
-  if (isRangeActive()) filters.push(`période « ${rangeLabel(state.range)} »`);
-  if (isCountryFilterActive()) filters.push(`pays « ${state.countries.join(', ')} »`);
+  if (isRangeActive(state.filters)) filters.push(`période « ${rangeLabel(state.filters)} »`);
+  if (state.filters.countries.length > 0) filters.push(`pays « ${state.filters.countries.join(', ')} »`);
 
   const canRetry = state.emptyRetries < EMPTY_RETRY_MAX;
   els.empty.textContent =
@@ -495,45 +474,38 @@ function showEmpty() {
 
 async function nextQuote() {
   if (state.busy) {
-    state.refreshQueued = true; // ex. une période choisie pendant une autre requête
+    state.refreshQueued = true; // ex. un filtre choisi pendant une autre requête
     return;
   }
   clearTimeout(state.retryTimer);
   setBusy(true);
   showError('');
   try {
-    const params = new URLSearchParams();
-    const exclude = state.seen.slice(-MAX_EXCLUDED).join(',');
-    if (exclude) params.set('exclude', exclude);
-    if (state.range.from !== null) params.set('from', state.range.from);
-    if (state.range.to !== null) params.set('to', state.range.to);
-    if (isCountryFilterActive()) params.set('countries', state.countries.join(','));
+    const params = filterParams(state.filters);
+    if (state.seen.length > 0) params.set('exclude', state.seen.join(','));
     const query = params.toString();
 
     const data = await api(`/api/quote${query ? `?${query}` : ''}`);
     updateCounts(data);
     if (data.empty) return showEmpty();
 
-    if (data.reset) state.seen = []; // toutes les répliques ont été vues : on repart de zéro
-    state.seen.push(data.id);
-    saveSeen();
+    // Toutes les répliques ont été vues : on repart de zéro.
+    state.seen = [...(data.reset ? [] : state.seen), data.id].slice(-MAX_EXCLUDED);
+    writeStored('session', SEEN_KEY, state.seen);
 
-    // Un seul pays choisi : l'indice « Pays d'origine » ne dirait plus rien, on ne le propose pas.
-    const hints = state.countries.length === 1 ? data.hints.filter((hint) => hint.key !== 'country') : data.hints;
-    state.current = { id: data.id, quote: data.quote, hints };
+    state.current = { id: data.id, hintCount: data.hints.length, countries: state.filters.countries };
     state.revealedHints = 0;
     state.emptyRetries = 0;
 
     els.quote.textContent = data.quote;
     els.quote.hidden = false;
+    animateIn(els.quote);
     els.empty.hidden = true;
     state.round += 1;
     els.round.textContent = `n°${state.round}`;
-    els.answer.hidden = true;
-    els.answer.replaceChildren();
+    clearAnswer();
     els.hintsSection.hidden = false;
-    els.next.classList.remove('emphasis');
-    renderHints(hints);
+    renderHints(data.hints);
   } catch {
     showError('Impossible de charger une réplique. Vérifie ta connexion puis réessaie.');
   } finally {
@@ -574,7 +546,7 @@ function setAuthMode(mode) {
   els.authSubmit.textContent = registering ? 'Créer mon compte' : 'Se connecter';
   els.authPassword.autocomplete = registering ? 'new-password' : 'current-password';
   els.authHelp.hidden = !registering;
-  els.authError.hidden = true;
+  showMessage(els.authError, '');
 }
 
 function openAuth() {
@@ -586,7 +558,7 @@ function openAuth() {
 
 async function submitAuth(event) {
   event.preventDefault();
-  els.authError.hidden = true;
+  showMessage(els.authError, '');
   els.authSubmit.disabled = true;
   try {
     const { user } = await api(`/api/auth/${state.authMode}`, {
@@ -597,8 +569,7 @@ async function submitAuth(event) {
     els.authForm.reset();
     els.authDialog.close();
   } catch (error) {
-    els.authError.textContent = error instanceof ApiError ? error.message : 'Connexion impossible. Réessaie dans un instant.';
-    els.authError.hidden = false;
+    showMessage(els.authError, error instanceof ApiError ? error.message : 'Connexion impossible. Réessaie dans un instant.');
   } finally {
     els.authSubmit.disabled = false;
   }
@@ -628,7 +599,8 @@ async function recordPlay(box) {
   try {
     const { entry } = await api('/api/history', {
       method: 'POST',
-      body: { quoteId: state.current.id, hintsUsed: state.revealedHints },
+      // Le filtre de pays sert au serveur à compter les indices comme ceux qui ont été proposés.
+      body: { quoteId: state.current.id, hintsUsed: state.revealedHints, countries: state.current.countries },
     });
     if (box.isConnected) renderResultChoice(box, entry.id);
   } catch (error) {
@@ -651,32 +623,14 @@ function renderResultChoice(box, entryId) {
     }
   };
 
-  const yes = document.createElement('button');
-  yes.type = 'button';
-  yes.className = 'btn btn-small btn-ghost';
-  yes.textContent = '✅ Oui';
-  yes.addEventListener('click', () => choose(true));
-  const no = document.createElement('button');
-  no.type = 'button';
-  no.className = 'btn btn-small btn-ghost';
-  no.textContent = '❌ Non';
-  no.addEventListener('click', () => choose(false));
-
-  const question = document.createElement('span');
-  question.className = 'question';
-  question.textContent = "Tu l'avais trouvée ?";
-  box.replaceChildren(question, yes, no);
+  box.replaceChildren(
+    el('span', 'question', "Tu l'avais trouvée ?"),
+    button('btn btn-small btn-ghost', '✅ Oui', () => choose(true)),
+    button('btn btn-small btn-ghost', '❌ Non', () => choose(false)),
+  );
 }
 
-function statTile(label, value) {
-  const tile = document.createElement('div');
-  const dt = document.createElement('dt');
-  dt.textContent = label;
-  const dd = document.createElement('dd');
-  dd.textContent = value;
-  tile.append(dt, dd);
-  return tile;
-}
+const statTile = (label, value) => el('div', '', el('dt', '', label), el('dd', '', value));
 
 function renderHistory({ stats, entries }) {
   els.historyStats.replaceChildren(
@@ -690,21 +644,9 @@ function renderHistory({ stats, entries }) {
   els.historyList.replaceChildren(
     ...entries.map((entry) => {
       const [icon, text] = RESULT_LABELS[String(entry.found)];
-      const li = document.createElement('li');
-
-      const badge = document.createElement('span');
-      badge.className = 'badge';
-      badge.textContent = icon;
+      const badge = el('span', 'badge', icon);
       badge.title = text;
       badge.setAttribute('aria-label', text);
-
-      const title = document.createElement('span');
-      title.className = 'title';
-      title.textContent = entry.year ? `${entry.title} (${entry.year})` : entry.title;
-
-      const excerpt = document.createElement('span');
-      excerpt.className = 'excerpt';
-      excerpt.textContent = `« ${entry.quote.length > 140 ? `${entry.quote.slice(0, 137)}…` : entry.quote} »`;
 
       const when = new Date(entry.at).toLocaleString('fr-FR', {
         day: 'numeric',
@@ -712,18 +654,20 @@ function renderHistory({ stats, entries }) {
         hour: '2-digit',
         minute: '2-digit',
       });
-      const meta = document.createElement('span');
-      meta.className = 'meta';
-      meta.textContent = `${text} · ${when} · ${entry.hintsUsed} indice${entry.hintsUsed > 1 ? 's' : ''} sur ${entry.hintsAvailable}`;
-
-      li.append(badge, title, excerpt, meta);
-      return li;
+      return el(
+        'li',
+        '',
+        badge,
+        el('span', 'title', entry.year ? `${entry.title} (${entry.year})` : entry.title),
+        el('span', 'excerpt', `« ${entry.quote.length > 140 ? `${entry.quote.slice(0, 137)}…` : entry.quote} »`),
+        el('span', 'meta', `${text} · ${when} · ${entry.hintsUsed} indice${entry.hintsUsed > 1 ? 's' : ''} sur ${entry.hintsAvailable}`),
+      );
     }),
   );
 }
 
 async function openHistory() {
-  els.historyError.hidden = true;
+  showMessage(els.historyError, '');
   els.historyDialog.showModal();
   try {
     renderHistory(await api('/api/history?limit=50'));
@@ -734,8 +678,7 @@ async function openHistory() {
       openAuth();
       return;
     }
-    els.historyError.textContent = "Impossible de charger l'historique. Réessaie dans un instant.";
-    els.historyError.hidden = false;
+    showMessage(els.historyError, "Impossible de charger l'historique. Réessaie dans un instant.");
   }
 }
 
@@ -750,24 +693,20 @@ function closeOnBackdropClick(dialog) {
 els.reveal.addEventListener('click', revealAnswer);
 els.next.addEventListener('click', nextQuote);
 
-els.periodForm.addEventListener('submit', (event) => {
-  event.preventDefault();
-  try {
-    applyRange({ from: parseYear(els.yearFrom), to: parseYear(els.yearTo) });
-  } catch (error) {
-    els.periodError.textContent = error.message;
-    els.periodError.hidden = false;
-  }
+els.filters.addEventListener('toggle', () => {
+  if (els.filters.open) return openFilters();
+  // Refermé : on ne garde pas les pastilles de cette fois (ni leur sélection) pour la prochaine ouverture.
+  els.countryChips.replaceChildren(countryNotice('Chargement des pays…'));
 });
-
-els.countriesPanel.addEventListener('toggle', () => {
-  if (!els.countriesPanel.open) return;
-  state.pendingCountries = new Set(state.countries); // on repart de ce qui est appliqué
-  renderCountryChips();
-});
-els.countriesForm.addEventListener('submit', (event) => {
+els.filtersForm.addEventListener('submit', (event) => {
   event.preventDefault();
-  applyCountries();
+  applyFilters();
+});
+els.filtersReset.addEventListener('click', () => {
+  els.yearFrom.value = '';
+  els.yearTo.value = '';
+  state.pendingCountries.clear();
+  applyFilters();
 });
 
 els.loginOpen.addEventListener('click', openAuth);
@@ -782,7 +721,6 @@ closeOnBackdropClick(els.authDialog);
 closeOnBackdropClick(els.historyDialog);
 
 buildPresets();
-renderRange();
-renderCountries();
+renderFilters();
 loadAccount();
 nextQuote();

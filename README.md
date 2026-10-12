@@ -183,7 +183,7 @@ Ce que la configuration garantit :
 
 Pour aller plus loin, ne laisse entrer le port 443 que depuis les [adresses Cloudflare](https://www.cloudflare.com/ips/) avec le pare-feu du serveur.
 
-Si tu vois l'ancienne version du site après une mise à jour, purge le cache dans Cloudflare (Caching > Purge Everything). Si la page s'affiche mal, désactive **Rocket Loader** (Speed > Optimization) : il modifie les scripts, ce que la politique de sécurité de l'appli (CSP) n'accepte pas.
+Les fichiers de l'interface sont servis avec une empreinte (`ETag`) et compressés en gzip : le navigateur les revalide à chaque visite et ne les retélécharge que s'ils ont changé (réponse `304`). Si tu vois quand même l'ancienne version du site après une mise à jour, purge le cache dans Cloudflare (Caching > Purge Everything). Si la page s'affiche mal, désactive **Rocket Loader** (Speed > Optimization) : il modifie les scripts, ce que la politique de sécurité de l'appli (CSP) n'accepte pas.
 
 **Sauvegarde et restauration des comptes**
 
@@ -251,17 +251,17 @@ Le jeu n'attend jamais Wikiquote : il pioche dans ce qui est déjà récolté. S
 
 ### Période d'années
 
-Le panneau « Période » au-dessus de la réplique accepte deux années (l'une ou l'autre peut rester vide) ou un préréglage. Le serveur ne tire alors que des films sortis **entre ces deux années, bornes comprises** ; si les bornes sont inversées, elles sont remises dans l'ordre. Le choix est mémorisé dans le navigateur.
+Le panneau « Filtres » au-dessus de la réplique (replié, il résume les filtres actifs : « 1990 – 1999 · France », ou « aucun ») accepte, pour la période, deux années (l'une ou l'autre peut rester vide) ou un préréglage ; un préréglage s'applique tout de suite, avec la sélection de pays en cours. « Tout afficher » retire tous les filtres. Le serveur ne tire alors que des films sortis **entre ces deux années, bornes comprises** ; si les bornes sont inversées, elles sont remises dans l'ordre. Le choix est mémorisé dans le navigateur.
 
 La plage guide aussi la récolte : les années choisies qui manquent de films passent en tête de la moisson, via les catégories Wikiquote « Œuvre de 1995 »… (qui mélangent films, livres et séries : seules les pages avec une fiche `{{Réf Film}}` ou une catégorie « Film… » sont gardées). Si aucun film n'est encore disponible pour la période, l'interface le dit et réessaie toute seule quelques fois pendant que la récolte cherche.
 
 ### Pays d'origine
 
-Le panneau « Pays d'origine », sous la période, liste les pays des films avec leur nombre de répliques. On peut en cocher **plusieurs** puis cliquer sur **Appliquer** : un film est proposé s'il vient de l'un d'eux (une coproduction compte pour chacun de ses pays). Le choix se combine avec la période et il est mémorisé dans le navigateur.
+Dans le panneau « Filtres », la section « Pays d'origine » liste les pays des films avec leur nombre de répliques (la liste est demandée à l'ouverture du panneau, donc à jour, et n'alourdit pas chaque tirage). On peut en cocher **plusieurs** puis cliquer sur **Appliquer** : un film est proposé s'il vient de l'un d'eux (une coproduction compte pour chacun de ses pays). Le choix se combine avec la période et il est mémorisé dans le navigateur.
 
 - **« Tous » (ou tous les pays cochés) = aucun filtre.** Les films dont on ne connaît pas le pays restent alors possibles ; dès qu'un pays est choisi, ils sont écartés.
 - Les nombres suivent la période choisie. Un pays déjà choisi reste affiché (à 0) si la période n'a aucun de ses films, pour pouvoir le décocher.
-- Quand **un seul** pays est choisi, l'indice « Pays d'origine » n'est plus proposé : il ne dirait rien. Avec plusieurs pays, il reste utile.
+- Quand **un seul** pays est choisi et que le film n'a que celui-là, l'indice « Pays d'origine » n'est pas proposé : il ne dirait rien. Avec plusieurs pays, ou pour une coproduction (il reste un autre pays à découvrir), il reste proposé. Le serveur en tient compte dans l'historique : « N indices sur M » compte ceux qui ont été proposés.
 - La récolte s'adapte : la catégorie Wikiquote du pays choisi (« Film japonais »…) passe en tête, avant les autres. Les pays que la récolte sait aller chercher (Allemagne, Australie, Belgique, Canada, Espagne, États-Unis, France, Italie, Japon, Royaume-Uni) sont proposés dès le démarrage, même sans réplique. Ils sont jugés sur la période choisie : un pays bien fourni, mais pas pour cette période, reste prioritaire.
 - **Limite des données.** Wikiquote en français ne classe les films par nationalité que pour une quinzaine de pays, et la plupart n'ont que quelques pages : à la date de rédaction, environ 330 pages pour « Film américain », 280 pour « Film français », 60 pour « Film britannique », 45 pour « Film italien », 20 pour « Film allemand », moins de 10 pour chacun des autres. Un pays absent de Wikiquote ne peut donc pas être proposé. Seules les trois premières nationalités d'une page sont retenues.
 
@@ -287,11 +287,12 @@ Le navigateur ne reçoit au départ que la réplique et la **liste** des indices
 
 | Route | Rôle |
 |---|---|
-| `GET /api/quote?from=1990&to=1999&countries=France,Italie&exclude=id1,id2` | Tire une réplique au hasard parmi les films de la période (`from` / `to` facultatifs) et des pays demandés (`countries`, noms séparés par des virgules, facultatif : absent ou vide = aucun filtre) en évitant celles déjà vues (si tout a été vu, le tirage repart de zéro : `reset: true`) ; `empty: true` si aucun film ne correspond. La réponse contient aussi `countries` (`[{ name, count }]`, les pays proposés dans la période) |
+| `GET /api/quote?from=1990&to=1999&countries=France,Italie&exclude=id1,id2` | Tire une réplique au hasard parmi les films de la période (`from` / `to` facultatifs) et des pays demandés (`countries`, noms séparés par des virgules, facultatif : absent ou vide = aucun filtre) en évitant celles déjà vues (si tout a été vu, le tirage repart de zéro : `reset: true`) ; `empty: true` si aucun film ne correspond. |
+| `GET /api/countries?from=1990&to=1999&countries=France` | Les pays proposés dans la période (`[{ name, count }]`, du mieux fourni au moins fourni). Les pays déjà choisis et ceux que la récolte sait aller chercher y figurent même à zéro réplique |
 | `GET /api/quote/:id/hint/:key` | Révèle un indice (`year`, `country`, `genre`, `director`, `actor`, `character`, `initial`) |
 | `GET /api/quote/:id/answer` | Révèle le titre, la fiche complète et la source |
 | `POST /api/auth/register`, `/login`, `/logout` · `GET /api/auth/me` | Compte du joueur (corps JSON `{ username, password }`) |
-| `GET /api/history` · `POST /api/history` · `POST /api/history/:id/result` | Historique du joueur connecté : liste et statistiques, ajout d'une partie, résultat (`{ found: true \| false }`) |
+| `GET /api/history` · `POST /api/history` · `POST /api/history/:id/result` | Historique du joueur connecté : liste et statistiques, ajout d'une partie (`{ quoteId, hintsUsed, countries? }`, `countries` étant le filtre de pays avec lequel la réplique a été tirée), résultat (`{ found: true \| false }`) |
 | `GET /healthz` | Sonde de santé (utilisée par le `HEALTHCHECK` Docker) |
 
 ## Structure

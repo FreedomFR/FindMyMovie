@@ -43,6 +43,7 @@ const CATEGORIES = [
 
 const MIN_QUOTE = 12;
 const MAX_QUOTE = 220;
+const FIRST_YEAR = 1888; // la première année du cinéma
 
 const COUNTRIES = {
   américain: 'États-Unis', américaine: 'États-Unis',
@@ -152,7 +153,7 @@ function leadText(wikitext) {
 
 function validYear(year) {
   const y = Number(year);
-  return Number.isInteger(y) && y >= 1888 && y <= new Date().getFullYear() + 1 ? y : null;
+  return Number.isInteger(y) && y >= FIRST_YEAR && y <= new Date().getFullYear() + 1 ? y : null;
 }
 
 function extractDirector(categories, lead) {
@@ -352,6 +353,7 @@ function createClient({
 module.exports = {
   CATEGORIES,
   DEFAULT_USER_AGENT,
+  FIRST_YEAR,
   WikiquoteError,
   countryCategory,
   countryOfCategory,

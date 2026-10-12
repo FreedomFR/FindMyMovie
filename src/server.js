@@ -3,6 +3,8 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
+const zlib = require('node:zlib');
 const quotes = require('./quotes');
 const auth = require('./auth');
 const { QuotePool, createFileStore } = require('./pool');
@@ -12,7 +14,6 @@ const { createClient } = require('./wikiquote');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const SESSION_COOKIE = 'fmm_session';
-const FIRST_YEAR = 1888;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -58,8 +59,23 @@ function parseExclude(value) {
     .slice(0, 200);
 }
 
-/** `?from=1990&to=2005` : l'une ou l'autre borne peut manquer. Renvoie null s'il n'y a aucune plage. */
-function parseRange(params) {
+const MAX_COUNTRIES = 40;
+const COUNTRY_PATTERN = /^\p{L}[\p{L} '’-]{0,39}$/u;
+
+/** Une liste de noms de pays : sans doublon ni blanc, 400 si un nom est mal formé. Liste vide : pas de filtre. */
+function countryNames(list) {
+  const names = [...new Set(list.map((name) => String(name).trim().normalize('NFC')).filter(Boolean))];
+  if (names.length > MAX_COUNTRIES || !names.every((name) => COUNTRY_PATTERN.test(name))) {
+    throw new HttpError(400, 'Pays invalide.');
+  }
+  return names;
+}
+
+/**
+ * Le filtre demandé : `?from=1990&to=2005&countries=France,Italie`. Chaque critère est facultatif :
+ * une borne absente vaut `null` (l'une ou l'autre peut manquer), les pays valent `[]`.
+ */
+function parseFilter(params) {
   const year = (value) => {
     if (value == null || value === '') return null;
     if (!/^\d{1,4}$/.test(value)) throw new HttpError(400, 'Année invalide.');
@@ -67,43 +83,83 @@ function parseRange(params) {
   };
   let from = year(params.get('from'));
   let to = year(params.get('to'));
-  if (from == null && to == null) return null;
   if (from != null && to != null && from > to) [from, to] = [to, from];
-  return { from, to };
+  return { from, to, countries: countryNames((params.get('countries') ?? '').split(',')) };
 }
 
-const MAX_COUNTRIES = 40;
-const COUNTRY_PATTERN = /^\p{L}[\p{L} '’-]{0,39}$/u;
+const hasFilter = ({ from, to, countries }) => from != null || to != null || countries.length > 0;
 
-/** `?countries=France,Italie` : les pays d'origine voulus. Absent ou vide : pas de filtre. */
-function parseCountries(params) {
-  const names = (params.get('countries') ?? '')
+// ---- fichiers statiques ------------------------------------------------------------------------
+
+// Les fichiers de public/ restent en mémoire, avec leur version compressée et leur empreinte (ETag) ; on les relit
+// dès qu'ils changent sur le disque. Le navigateur revalide à chaque fois (`no-cache`) mais ne retélécharge rien
+// tant que l'empreinte est la même (réponse 304).
+const staticCache = new Map();
+const COMPRESSIBLE = new Set(['.html', '.css', '.js', '.svg']);
+
+async function readStatic(file) {
+  const stat = await fs.promises.stat(file);
+  if (!stat.isFile()) return null;
+  const cached = staticCache.get(file);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached;
+
+  const body = await fs.promises.readFile(file);
+  const entry = {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    body,
+    gzip: COMPRESSIBLE.has(path.extname(file)) ? zlib.gzipSync(body, { level: 9 }) : null,
+    etag: `"${crypto.createHash('sha256').update(body).digest('base64url').slice(0, 22)}"`,
+  };
+  staticCache.set(file, entry);
+  return entry;
+}
+
+/** « If-None-Match » : une liste d'empreintes, éventuellement « faibles » (W/…, Cloudflare les affaiblit en compressant). */
+const etagMatches = (header, etag) =>
+  String(header ?? '')
     .split(',')
-    .map((name) => name.trim().normalize('NFC'))
-    .filter(Boolean);
-  const unique = [...new Set(names)];
-  if (unique.length > MAX_COUNTRIES || !unique.every((name) => COUNTRY_PATTERN.test(name))) {
-    throw new HttpError(400, 'Pays invalide.');
-  }
-  return unique;
-}
+    .some((tag) => tag.trim() === '*' || tag.trim().replace(/^W\//, '') === etag);
 
-function serveStatic(req, res, pathname) {
+/** « Accept-Encoding » accepte-t-il gzip (et pas « gzip;q=0 ») ? */
+const acceptsGzip = (header) =>
+  String(header ?? '')
+    .split(',')
+    .some((part) => {
+      const [name, ...params] = part.trim().toLowerCase().split(';');
+      return name === 'gzip' && !params.some((param) => /^\s*q=0(?:\.0*)?\s*$/.test(param));
+    });
+
+async function serveStatic(req, res, pathname) {
   const rel = pathname === '/' ? 'index.html' : pathname.slice(1);
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   // Empêche de sortir de public/ (../, chemins absolus…).
   if (file !== PUBLIC_DIR && !file.startsWith(PUBLIC_DIR + path.sep)) {
     return sendJson(res, 404, { error: 'Introuvable' });
   }
-  fs.readFile(file, (err, content) => {
-    if (err) return sendJson(res, 404, { error: 'Introuvable' });
-    res.writeHead(200, {
-      ...SECURITY_HEADERS,
-      'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-      'Cache-Control': 'no-cache',
-    });
-    res.end(req.method === 'HEAD' ? undefined : content);
+  const entry = await readStatic(file).catch(() => null); // absent, dossier, illisible : même réponse
+  if (!entry) return sendJson(res, 404, { error: 'Introuvable' });
+
+  const validators = {
+    ...SECURITY_HEADERS,
+    'Cache-Control': 'no-cache',
+    ETag: entry.etag,
+    ...(entry.gzip && { Vary: 'Accept-Encoding' }),
+  };
+  if (etagMatches(req.headers['if-none-match'], entry.etag)) {
+    res.writeHead(304, validators);
+    return res.end();
+  }
+
+  const compressed = entry.gzip && acceptsGzip(req.headers['accept-encoding']);
+  const body = compressed ? entry.gzip : entry.body;
+  res.writeHead(200, {
+    ...validators,
+    'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
+    'Content-Length': body.length,
+    ...(compressed && { 'Content-Encoding': 'gzip' }),
   });
+  res.end(req.method === 'HEAD' ? undefined : body);
 }
 
 /** Corps JSON limité en taille. Le type JSON obligatoire empêche les formulaires d'un autre site (CSRF). */
@@ -194,27 +250,26 @@ function createServer(pool = new QuotePool(quotes.load()), { users = null, harve
   // ---- réponses de l'API --------------------------------------------------------------------
 
   function handleQuote(url, res) {
-    const range = parseRange(url.searchParams);
-    const countries = parseCountries(url.searchParams);
+    const filter = parseFilter(url.searchParams);
     // Un filtre choisi : la moisson s'occupe en priorité des années et des pays qui manquent de films.
-    if ((range || countries.length > 0) && harvester) {
-      harvester.prioritize({
-        ...(range && { from: range.from ?? FIRST_YEAR, to: range.to ?? new Date().getFullYear() }),
-        countries,
-      });
-    }
-    const candidates = pool.inRange({ ...range, countries });
-    const base = {
-      total: pool.size,
-      inRange: candidates.length,
-      bounds: pool.bounds(),
-      // Les pays proposés dans la période choisie (pas dans la sélection de pays : on peut toujours en ajouter).
-      countries: pool.countries(range ?? {}, harvester?.harvestableCountries),
-    };
+    if (harvester && hasFilter(filter)) harvester.prioritize(filter);
+    const candidates = pool.inRange(filter);
+    const base = { total: pool.size, inRange: candidates.length, bounds: pool.bounds() };
 
     const { movie, reset } = quotes.pickRandom(candidates, parseExclude(url.searchParams.get('exclude')));
     if (!movie) return sendJson(res, 200, { ...base, empty: true });
-    sendJson(res, 200, { ...quotes.publicView(movie), ...base, reset });
+    sendJson(res, 200, { ...quotes.publicView(movie, filter), ...base, reset });
+  }
+
+  /**
+   * Les pays proposés dans la période choisie, avec leur nombre de répliques, du mieux fourni au moins fourni.
+   * Les pays déjà choisis et ceux que la moisson sait aller chercher y figurent même sans réplique.
+   * La liste est demandée à l'ouverture du panneau : elle n'alourdit pas chaque tirage.
+   */
+  function handleCountries(url, res) {
+    const { from, to, countries } = parseFilter(url.searchParams);
+    const offered = [...(harvester?.harvestableCountries ?? []), ...countries];
+    sendJson(res, 200, { countries: pool.countries({ from, to }, offered) });
   }
 
   async function handleRegister(req, res) {
@@ -251,13 +306,15 @@ function createServer(pool = new QuotePool(quotes.load()), { users = null, harve
 
   async function handleAddHistory(req, res) {
     const user = requireUser(req);
-    const { quoteId, hintsUsed } = await readJson(req);
+    const { quoteId, hintsUsed, countries } = await readJson(req);
     const movie = typeof quoteId === 'string' && ID_PATTERN.test(quoteId) ? pool.get(quoteId) : null;
     if (!movie) throw new HttpError(404, 'Citation inconnue.');
     if (!Number.isInteger(hintsUsed) || hintsUsed < 0) throw new HttpError(400, "Nombre d'indices invalide.");
 
-    // Le titre et la réponse viennent du serveur : le client ne peut pas falsifier son historique.
-    const hintsAvailable = quotes.availableHints(movie).length;
+    // Le titre et la réponse viennent du serveur : le client ne peut pas falsifier son historique. Le filtre de pays
+    // sert seulement à compter les indices comme ceux qui ont été proposés (voir `offeredHints`).
+    const filter = { countries: Array.isArray(countries) ? countryNames(countries) : [] };
+    const hintsAvailable = quotes.offeredHints(movie, filter).length;
     const entry = users.addHistory(user, {
       quoteId: movie.id,
       quote: movie.quote.length > 160 ? `${movie.quote.slice(0, 159)}…` : movie.quote, // le fichier est réécrit en entier : on le garde compact
@@ -312,6 +369,7 @@ function createServer(pool = new QuotePool(quotes.load()), { users = null, harve
 
     if (pathname === '/healthz') return sendJson(res, 200, { status: 'ok' });
     if (pathname === '/api/quote') return handleQuote(url, res);
+    if (pathname === '/api/countries') return handleCountries(url, res);
 
     if (pathname === '/api/auth/me') {
       const user = currentUser(req);

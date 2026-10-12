@@ -2,11 +2,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const quotes = require('../src/quotes');
 const { QuotePool } = require('../src/pool');
+const { UserStore } = require('../src/users');
 const { createHarvester } = require('../src/harvester');
 const { CATEGORIES, countryCategory, extractFilmMeta } = require('../src/wikiquote');
-const { startServer } = require('./helpers');
+const { postJson, sessionCookie, startServer, tempDir } = require('./helpers');
 
 const seed = quotes.load();
 const countryOf = (id) => seed.find((m) => m.id === id).country;
@@ -146,32 +148,64 @@ test('les pays et la période se combinent, et le nombre de répliques tient com
   }
 });
 
-test('la réponse liste les pays de la période (pas ceux de la sélection) avec leur effectif', async () => {
+async function getCountries(base, query = '') {
+  const res = await fetch(`${base}/api/countries${query}`);
+  return { status: res.status, body: await res.json() };
+}
+
+test('/api/countries liste les pays de la période (pas ceux de la sélection) avec leur effectif', async () => {
   const server = await startServer(pool());
   try {
-    const all = (await getQuote(server.base)).body;
+    const { status, body: all } = await getCountries(server.base);
+    assert.equal(status, 200);
     assert.deepEqual(all.countries.map((c) => c.name), ['États-Unis', 'France', 'Italie', 'Japon', 'Royaume-Uni']);
     assert.deepEqual(all.countries[1], { name: 'France', count: 2 });
 
     // Choisir la France ne retire pas les autres pays de la liste : on doit pouvoir en ajouter.
-    const france = (await getQuote(server.base, '?countries=France')).body;
-    assert.deepEqual(france.countries, all.countries);
+    assert.deepEqual((await getCountries(server.base, '?countries=France')).body, all);
 
-    const recent = (await getQuote(server.base, '?from=2000')).body;
+    const recent = (await getCountries(server.base, '?from=2000')).body;
     assert.deepEqual(recent.countries.map((c) => c.name), ['États-Unis', 'France', 'Royaume-Uni']);
   } finally {
     await server.close();
   }
 });
 
-test('un pays sans aucune réplique répond « vide », et la liste reste disponible', async () => {
+test('/api/countries ajoute les pays déjà choisis et ceux que la moisson sait récolter, même à zéro réplique', async () => {
+  const harvester = { prioritize() {}, harvestableCountries: ['Belgique', 'France'] };
+  const server = await startServer(pool(), { harvester });
+  try {
+    const { countries } = (await getCountries(server.base, `?from=2000&countries=${encodeURIComponent('Japon,Atlantide')}`)).body;
+    assert.deepEqual(countries.slice(0, 3).map((c) => c.name), ['États-Unis', 'France', 'Royaume-Uni']);
+    assert.deepEqual(countries.slice(3), [
+      { name: 'Atlantide', count: 0 },
+      { name: 'Belgique', count: 0 },
+      { name: 'Japon', count: 0 },
+    ]);
+    assert.equal(countries.find((c) => c.name === 'France').count, 1, 'un pays présent garde son effectif');
+  } finally {
+    await server.close();
+  }
+});
+
+test("/api/countries refuse une période ou un nom de pays invalides, et /api/quote n'embarque plus la liste", async () => {
+  const server = await startServer(pool());
+  try {
+    assert.equal((await getCountries(server.base, '?from=abc')).status, 400);
+    assert.equal((await getCountries(server.base, '?countries=France;drop')).status, 400);
+    assert.ok(!('countries' in (await getQuote(server.base)).body), 'la liste est demandée à part, à l\'ouverture du panneau');
+  } finally {
+    await server.close();
+  }
+});
+
+test('un pays sans aucune réplique répond « vide »', async () => {
   const server = await startServer(pool());
   try {
     const { status, body } = await getQuote(server.base, '?countries=Atlantide');
     assert.equal(status, 200);
     assert.equal(body.empty, true);
     assert.equal(body.inRange, 0);
-    assert.ok(body.countries.length > 0);
   } finally {
     await server.close();
   }
@@ -216,22 +250,76 @@ test('un nom de pays invalide est refusé, et la liste est limitée', async () =
 
 test('choisir des pays demande à la moisson de s\'en occuper, avec ou sans période', async () => {
   const calls = [];
-  const harvester = { prioritize: (target) => calls.push(target), harvestableCountries: ['Belgique'] };
+  const harvester = { prioritize: (target) => calls.push(target) };
   const server = await startServer(pool(), { harvester });
   try {
-    const { body } = await getQuote(server.base);
+    await getQuote(server.base);
     assert.deepEqual(calls, [], 'sans filtre, rien à prioriser');
-    assert.deepEqual(body.countries.at(-1), { name: 'Belgique', count: 0 }, 'un pays récoltable est proposé même sans réplique');
 
     await getQuote(server.base, `?countries=${encodeURIComponent('Japon,Belgique')}`);
     await getQuote(server.base, '?from=1990&to=1995&countries=France');
     assert.deepEqual(calls, [
-      { countries: ['Japon', 'Belgique'] }, // pas de période : on ne cible aucune année
+      { from: null, to: null, countries: ['Japon', 'Belgique'] }, // pas de période : on ne cible aucune année
       { from: 1990, to: 1995, countries: ['France'] },
     ]);
   } finally {
     await server.close();
   }
+});
+
+// ---- indice « Pays d'origine » ---------------------------------------------------------------
+
+const hintKeys = (movie, filter) => quotes.offeredHints(movie, filter).map((h) => h.key);
+
+test("l'indice « Pays d'origine » n'est proposé que s'il apprend encore quelque chose", () => {
+  const french = film('f', 'France');
+  const coproduction = film('c', 'France / Italie');
+  assert.deepEqual(hintKeys(french, undefined), ['year', 'country', 'initial']);
+  assert.deepEqual(hintKeys(french, { countries: [] }), ['year', 'country', 'initial']);
+  assert.deepEqual(hintKeys(french, { countries: ['France'] }), ['year', 'initial'], 'un seul pays choisi, un seul au film');
+  assert.ok(hintKeys(french, { countries: ['France', 'Italie'] }).includes('country'), 'plusieurs pays : il les départage');
+  assert.ok(hintKeys(coproduction, { countries: ['France'] }).includes('country'), 'une coproduction a un autre pays à révéler');
+});
+
+test("/api/quote ne propose pas l'indice pays quand il serait inutile, et la réponse le donne toujours", async () => {
+  const p = new QuotePool([film('fr', 'France'), film('fr-it', 'France / Italie'), film('it', 'Italie')]);
+  const server = await startServer(p);
+  try {
+    const keys = async (query) => (await getQuote(server.base, query)).body.hints.map((h) => h.key);
+    assert.deepEqual(await keys('?countries=France&exclude=fr-it'), ['year', 'initial'], 'film français, filtre « France »');
+    assert.ok((await keys('?countries=France&exclude=fr')).includes('country'), 'coproduction : « Italie » reste à découvrir');
+    assert.ok((await keys('?countries=France,Italie&exclude=fr-it,it')).includes('country'), 'deux pays choisis');
+    assert.ok((await keys('?exclude=fr-it,it')).includes('country'), 'aucun filtre');
+
+    const answer = await (await fetch(`${server.base}/api/quote/fr/answer`)).json();
+    assert.ok(answer.details.some((d) => d.key === 'country' && d.value === 'France'));
+  } finally {
+    await server.close();
+  }
+});
+
+test("l'historique compte les indices comme ceux qui ont été proposés", async () => {
+  const users = new UserStore({ file: path.join(tempDir(), 'users.json'), persistDelayMs: 5 });
+  const server = await startServer(new QuotePool([film('fr', 'France')]), { users });
+  try {
+    const cookie = sessionCookie(await postJson(server.base, '/api/auth/register', { username: 'Alice', password: 'motdepasse1' }));
+    const available = async (extra) => {
+      const res = await postJson(server.base, '/api/history', { quoteId: 'fr', hintsUsed: 9, ...extra }, { cookie });
+      return (await res.json()).entry.hintsAvailable;
+    };
+    assert.equal(await available({}), 3);
+    assert.equal(await available({ countries: ['France'] }), 2, 'l\'indice pays n\'a pas été proposé');
+    assert.equal(await available({ countries: ['France', 'Italie'] }), 3);
+    assert.equal((await postJson(server.base, '/api/history', { quoteId: 'fr', hintsUsed: 0, countries: ['<b>'] }, { cookie })).status, 400);
+  } finally {
+    await server.close();
+    await users.flush();
+  }
+});
+
+test('bounds() se calcule en une passe : un grand réservoir ne fait pas déborder la pile', () => {
+  const many = Array.from({ length: 200_000 }, (_, i) => film(`m${i}`, 'France', 1900 + (i % 100)));
+  assert.deepEqual(new QuotePool(many).bounds(), { min: 1900, max: 1999 });
 });
 
 // ---- moisson ciblée --------------------------------------------------------------------------

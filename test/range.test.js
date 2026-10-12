@@ -104,7 +104,7 @@ test("une plage sans aucun film répond « vide » au lieu de tirer au hasard", 
   try {
     const { status, body } = await getQuote(server.base, '?from=1800&to=1850');
     assert.equal(status, 200);
-    assert.deepEqual(body, { total: seed.length, inRange: 0, bounds: { min: 1938, max: 2014 }, countries: [], empty: true });
+    assert.deepEqual(body, { total: seed.length, inRange: 0, bounds: { min: 1938, max: 2014 }, empty: true });
   } finally {
     await server.close();
   }
@@ -140,7 +140,7 @@ test('les répliques déjà vues sont exclues dans la plage, qui repart de zéro
   }
 });
 
-test("choisir une plage demande à la moisson de s'en occuper (avec des bornes par défaut)", async () => {
+test("choisir une plage demande à la moisson de s'en occuper (une borne absente reste ouverte)", async () => {
   const calls = [];
   const harvester = { prioritize: (range) => calls.push(range) };
   const server = await startServer(new QuotePool(seed), { harvester });
@@ -151,11 +151,10 @@ test("choisir une plage demande à la moisson de s'en occuper (avec des bornes p
     await getQuote(server.base, '?from=1990&to=1995');
     await getQuote(server.base, '?from=2000');
     await getQuote(server.base, '?to=1950');
-    const thisYear = new Date().getFullYear();
     assert.deepEqual(calls, [
       { from: 1990, to: 1995, countries: [] },
-      { from: 2000, to: thisYear, countries: [] },
-      { from: 1888, to: 1950, countries: [] },
+      { from: 2000, to: null, countries: [] },
+      { from: null, to: 1950, countries: [] },
     ]);
   } finally {
     await server.close();

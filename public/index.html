@@ -27,32 +27,30 @@
     <section class="card" aria-labelledby="quote-label">
       <p class="counter" id="quote-label">Réplique <span id="round">–</span></p>
 
-      <details class="period" id="period">
+      <details class="filters" id="filters" data-active="false">
         <summary>
-          Période : <strong id="period-label">toutes les années</strong>
-          <span class="period-count" id="period-count"></span>
+          <span class="filters-title">Filtres</span>
+          <span class="filters-summary" id="filters-summary">aucun</span>
+          <span class="filters-count" id="filters-count"></span>
         </summary>
-        <form class="period-form" id="period-form" novalidate>
-          <div class="period-fields">
-            <label>De <input type="number" id="year-from" inputmode="numeric" step="1" min="1888" max="2100" aria-label="Année de début"></label>
-            <label>à <input type="number" id="year-to" inputmode="numeric" step="1" min="1888" max="2100" aria-label="Année de fin"></label>
+        <form class="filters-form" id="filters-form" novalidate>
+          <fieldset class="filter">
+            <legend>Période</legend>
+            <div class="filter-fields">
+              <label>De <input type="number" id="year-from" inputmode="numeric" step="1" min="1888" max="2100" aria-label="Année de début"></label>
+              <label>à <input type="number" id="year-to" inputmode="numeric" step="1" min="1888" max="2100" aria-label="Année de fin"></label>
+            </div>
+            <div class="chips" id="presets" role="group" aria-label="Périodes prédéfinies"></div>
+          </fieldset>
+          <fieldset class="filter">
+            <legend>Pays d'origine</legend>
+            <p class="muted small filter-help">Plusieurs choix possibles. Un film coproduit compte pour chacun de ses pays.</p>
+            <div class="chips" id="country-chips" role="group" aria-label="Pays d'origine"><span class="muted small">Chargement des pays…</span></div>
+          </fieldset>
+          <p class="error" id="filters-error" role="alert" hidden></p>
+          <div class="filters-actions">
             <button type="submit" class="btn btn-small btn-primary">Appliquer</button>
-          </div>
-          <div class="presets" id="presets" role="group" aria-label="Périodes prédéfinies"></div>
-          <p class="error" id="period-error" role="alert" hidden></p>
-        </form>
-      </details>
-
-      <details class="period" id="countries">
-        <summary>
-          Pays d'origine : <strong id="countries-label">tous</strong>
-          <span class="period-count" id="countries-count"></span>
-        </summary>
-        <form class="period-form" id="countries-form">
-          <p class="muted small">Choisis un ou plusieurs pays. Un film coproduit compte pour chacun de ses pays.</p>
-          <div class="presets" id="country-chips" role="group" aria-label="Pays d'origine"></div>
-          <div class="period-fields country-actions">
-            <button type="submit" class="btn btn-small btn-primary">Appliquer</button>
+            <button type="button" class="btn btn-small btn-ghost" id="filters-reset">Tout afficher</button>
           </div>
         </form>
       </details>

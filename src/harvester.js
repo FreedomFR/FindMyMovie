@@ -1,6 +1,7 @@
 'use strict';
 
-const { CATEGORIES, countryCategory, countryOfCategory, parseFilmPage } = require('./wikiquote');
+const { setTimeout: delay } = require('node:timers/promises');
+const { CATEGORIES, FIRST_YEAR, countryCategory, countryOfCategory, parseFilmPage } = require('./wikiquote');
 
 const MIN_WAIT_MS = 1_000;
 const MAX_RATE_LIMIT_WAIT_MS = 10 * 60_000;
@@ -8,7 +9,6 @@ const BASE_BACKOFF_MS = 30_000;
 const MAX_BACKOFF_MS = 15 * 60_000;
 
 // Moisson ciblée sur une plage d'années (catégories « Œuvre de 1995 »…).
-const FIRST_YEAR = 1888;
 const MAX_PRIORITY_YEARS = 12; // années traitées à la fois
 const ENOUGH_PER_YEAR = 40; // au-delà, une année est considérée comme bien fournie
 const yearCategory = (year) => `Œuvre de ${year}`;
@@ -17,22 +17,9 @@ const yearCategory = (year) => `Œuvre de ${year}`;
 const MAX_PRIORITY_COUNTRIES = 6; // pays traités à la fois
 const ENOUGH_PER_COUNTRY = 100; // au-delà, un pays est considéré comme bien fourni
 
-function defaultSleep(ms, signal) {
-  return new Promise((resolve) => {
-    // Arrêt déjà demandé (pendant une requête, par exemple) : l'événement « abort »
-    // ne se redéclencherait pas, on ne doit donc pas attendre.
-    if (signal?.aborted) return resolve();
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
-  });
-}
+// Une pause qu'un arrêt interrompt (ou qui n'a pas lieu si l'arrêt est déjà demandé). On passe par les minuteurs
+// de Node, qui détachent eux-mêmes l'écouteur du signal : l'ancienne version en laissait un par pause (~9 Mo par jour).
+const defaultSleep = (ms, signal) => delay(ms, undefined, { signal }).catch(() => {});
 
 /**
  * Moissonne Wikiquote en arrière-plan : un lot de 50 pages à la fois, en alternant
@@ -152,12 +139,15 @@ function createHarvester({
    * Les deux filtres se combinent : un pays est jugé sur la période choisie, une année sur les pays choisis.
    * Renvoie les catégories retenues.
    */
-  function prioritize({ from, to, countries = [] }) {
-    const period = Number.isInteger(from) && Number.isInteger(to) && from <= to ? { from, to } : null;
+  function prioritize({ from = null, to = null, countries = [] } = {}) {
     const wanted = Array.isArray(countries) ? countries : [];
-    if (!period && wanted.length === 0) return [];
+    // Une borne absente reste ouverte ; sans aucune borne, on ne moissonne pas par années.
+    const bound = (year) => (Number.isInteger(year) ? year : null);
+    const period = { from: bound(from), to: bound(to) };
+    const byYear = period.from !== null || period.to !== null;
+    if (!byYear && wanted.length === 0) return [];
 
-    const countryCounts = pool.countryCounts(period ?? {});
+    const countryCounts = pool.countryCounts(period);
     const countryCategories = leastFilled(
       wanted.map((country) => ({
         category: countryCategory(country),
@@ -168,10 +158,11 @@ function createHarvester({
     );
 
     const yearCategories = [];
-    if (period) {
+    if (byYear) {
       const yearCounts = pool.yearCounts({ countries: wanted });
+      const thisYear = new Date().getFullYear();
       const years = [];
-      for (let year = Math.max(period.from, FIRST_YEAR); year <= Math.min(period.to, new Date().getFullYear()); year += 1) {
+      for (let year = Math.max(period.from ?? FIRST_YEAR, FIRST_YEAR); year <= Math.min(period.to ?? thisYear, thisYear); year += 1) {
         years.push({ category: yearCategory(year), have: yearCounts.get(year) ?? 0, enough: ENOUGH_PER_YEAR });
       }
       yearCategories.push(...leastFilled(years, MAX_PRIORITY_YEARS));

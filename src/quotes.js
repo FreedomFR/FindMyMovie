@@ -32,17 +32,29 @@ function load(file = DATA_FILE) {
   return raw.map((entry, i) => ({ id: `seed-${i + 1}`, ...entry }));
 }
 
+/** Les pays d'origine d'un film : une coproduction en a plusieurs, séparés par « / ». Aucun si on ne les connaît pas. */
+const countriesOf = (movie) => (movie.country ? movie.country.split(' / ') : []);
+
 const availableHints = (movie) => HINTS.filter((h) => h.get(movie));
 
 /**
- * Ce que le client a le droit de voir avant de cliquer : la réplique et la
- * liste des indices disponibles, jamais leur contenu.
+ * Les indices proposés au joueur. Quand il n'a gardé qu'un seul pays et que le film n'a que celui-là,
+ * l'indice « Pays d'origine » ne lui apprendrait rien : on ne le propose pas.
  */
-function publicView(movie) {
+function offeredHints(movie, { countries = [] } = {}) {
+  const countryKnown = countries.length === 1 && countriesOf(movie).length === 1;
+  return availableHints(movie).filter((h) => !(countryKnown && h.key === 'country'));
+}
+
+/**
+ * Ce que le client a le droit de voir avant de cliquer : la réplique et la
+ * liste des indices proposés, jamais leur contenu.
+ */
+function publicView(movie, filter) {
   return {
     id: movie.id,
     quote: movie.quote,
-    hints: availableHints(movie).map(({ key, label }) => ({ key, label })),
+    hints: offeredHints(movie, filter).map(({ key, label }) => ({ key, label })),
   };
 }
 
@@ -76,4 +88,15 @@ function pickRandom(movies, excludeIds = [], rng = Math.random) {
   return { movie: pool[Math.floor(rng() * pool.length)], reset };
 }
 
-module.exports = { HINTS, load, publicView, hintFor, answerFor, availableHints, pickRandom, initialOf };
+module.exports = {
+  HINTS,
+  load,
+  publicView,
+  hintFor,
+  answerFor,
+  availableHints,
+  offeredHints,
+  countriesOf,
+  pickRandom,
+  initialOf,
+};
