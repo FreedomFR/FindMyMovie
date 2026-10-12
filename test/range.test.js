@@ -104,7 +104,7 @@ test("une plage sans aucun film répond « vide » au lieu de tirer au hasard", 
   try {
     const { status, body } = await getQuote(server.base, '?from=1800&to=1850');
     assert.equal(status, 200);
-    assert.deepEqual(body, { total: seed.length, inRange: 0, bounds: { min: 1938, max: 2014 }, empty: true });
+    assert.deepEqual(body, { total: seed.length, inRange: 0, bounds: { min: 1938, max: 2014 }, countries: [], empty: true });
   } finally {
     await server.close();
   }
@@ -153,9 +153,9 @@ test("choisir une plage demande à la moisson de s'en occuper (avec des bornes p
     await getQuote(server.base, '?to=1950');
     const thisYear = new Date().getFullYear();
     assert.deepEqual(calls, [
-      { from: 1990, to: 1995 },
-      { from: 2000, to: thisYear },
-      { from: 1888, to: 1950 },
+      { from: 1990, to: 1995, countries: [] },
+      { from: 2000, to: thisYear, countries: [] },
+      { from: 1888, to: 1950, countries: [] },
     ]);
   } finally {
     await server.close();

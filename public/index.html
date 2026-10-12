@@ -43,6 +43,20 @@
         </form>
       </details>
 
+      <details class="period" id="countries">
+        <summary>
+          Pays d'origine : <strong id="countries-label">tous</strong>
+          <span class="period-count" id="countries-count"></span>
+        </summary>
+        <form class="period-form" id="countries-form">
+          <p class="muted small">Choisis un ou plusieurs pays. Un film coproduit compte pour chacun de ses pays.</p>
+          <div class="presets" id="country-chips" role="group" aria-label="Pays d'origine"></div>
+          <div class="period-fields country-actions">
+            <button type="submit" class="btn btn-small btn-primary">Appliquer</button>
+          </div>
+        </form>
+      </details>
+
       <blockquote class="quote" id="quote" aria-live="polite">Chargement…</blockquote>
       <p class="empty" id="empty" role="status" hidden></p>
 

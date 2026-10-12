@@ -72,6 +72,22 @@ function parseRange(params) {
   return { from, to };
 }
 
+const MAX_COUNTRIES = 40;
+const COUNTRY_PATTERN = /^\p{L}[\p{L} '’-]{0,39}$/u;
+
+/** `?countries=France,Italie` : les pays d'origine voulus. Absent ou vide : pas de filtre. */
+function parseCountries(params) {
+  const names = (params.get('countries') ?? '')
+    .split(',')
+    .map((name) => name.trim().normalize('NFC'))
+    .filter(Boolean);
+  const unique = [...new Set(names)];
+  if (unique.length > MAX_COUNTRIES || !unique.every((name) => COUNTRY_PATTERN.test(name))) {
+    throw new HttpError(400, 'Pays invalide.');
+  }
+  return unique;
+}
+
 function serveStatic(req, res, pathname) {
   const rel = pathname === '/' ? 'index.html' : pathname.slice(1);
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
@@ -179,12 +195,22 @@ function createServer(pool = new QuotePool(quotes.load()), { users = null, harve
 
   function handleQuote(url, res) {
     const range = parseRange(url.searchParams);
-    // Une plage choisie : la moisson s'occupe en priorité des années qui manquent de films.
-    if (range && harvester) {
-      harvester.prioritize({ from: range.from ?? FIRST_YEAR, to: range.to ?? new Date().getFullYear() });
+    const countries = parseCountries(url.searchParams);
+    // Un filtre choisi : la moisson s'occupe en priorité des années et des pays qui manquent de films.
+    if ((range || countries.length > 0) && harvester) {
+      harvester.prioritize({
+        ...(range && { from: range.from ?? FIRST_YEAR, to: range.to ?? new Date().getFullYear() }),
+        countries,
+      });
     }
-    const candidates = pool.inRange(range ?? {});
-    const base = { total: pool.size, inRange: candidates.length, bounds: pool.bounds() };
+    const candidates = pool.inRange({ ...range, countries });
+    const base = {
+      total: pool.size,
+      inRange: candidates.length,
+      bounds: pool.bounds(),
+      // Les pays proposés dans la période choisie (pas dans la sélection de pays : on peut toujours en ajouter).
+      countries: pool.countries(range ?? {}, harvester?.harvestableCountries),
+    };
 
     const { movie, reset } = quotes.pickRandom(candidates, parseExclude(url.searchParams.get('exclude')));
     if (!movie) return sendJson(res, 200, { ...base, empty: true });

@@ -77,6 +77,22 @@ const COUNTRIES = {
   israélien: 'Israël', israélienne: 'Israël',
 };
 
+// Le motif d'une catégorie de nationalité : « Film français », « Film d'animation japonais »…
+const NATIONALITY_CATEGORY = /^film (?:d['’]animation )?(.+)$/i;
+
+const countryOfCategory = (category) => {
+  const demonym = NATIONALITY_CATEGORY.exec(category)?.[1]?.toLowerCase();
+  return demonym && Object.hasOwn(COUNTRIES, demonym) ? COUNTRIES[demonym] : null;
+};
+
+// Pays → catégorie Wikiquote « Film <nationalité> », avec la première nationalité listée pour ce pays.
+// Une catégorie qui n'existe pas (Wikiquote n'en a que pour une quinzaine de pays) ne renvoie aucune page.
+const COUNTRY_CATEGORIES = new Map();
+for (const [demonym, country] of Object.entries(COUNTRIES)) {
+  if (!COUNTRY_CATEGORIES.has(country)) COUNTRY_CATEGORIES.set(country, `Film ${demonym}`);
+}
+const countryCategory = (country) => COUNTRY_CATEGORIES.get(country) ?? null;
+
 // Seules les catégories reconnues comme des genres sont utilisées pour l'indice « Genre ».
 const GENRES = [
   [/^film d['’]action$/i, 'Action'],
@@ -157,12 +173,7 @@ function extractFilmMeta(pageTitle, wikitext) {
   const categories = extractCategories(wikitext);
   const lead = leadText(wikitext);
 
-  const countries = unique(
-    categories
-      .map((c) => /^film (?:d['’]animation )?(.+)$/i.exec(c)?.[1])
-      .map((demonym) => demonym && COUNTRIES[demonym.toLowerCase()])
-      .filter(Boolean),
-  );
+  const countries = unique(categories.map(countryOfCategory).filter(Boolean));
   const genres = unique(
     categories.map((c) => GENRES.find(([re]) => re.test(c))?.[1]).filter(Boolean),
   );
@@ -342,6 +353,8 @@ module.exports = {
   CATEGORIES,
   DEFAULT_USER_AGENT,
   WikiquoteError,
+  countryCategory,
+  countryOfCategory,
   createClient,
   parseFilmPage,
   extractQuote,

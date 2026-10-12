@@ -3,7 +3,7 @@
 Un petit jeu web : une réplique culte s'affiche, à toi de retrouver le film.
 Si tu sèches, des **indices** (année, pays, genre, réalisateur, acteur, personnage, initiale du titre) sont disponibles — mais ils ne se dévoilent **qu'au clic**. Un bouton **Révéler la réponse** affiche le film et sa fiche complète.
 
-Tu peux aussi **choisir une période** (« 1990 – 1999 », « avant 1970 »…) : seuls des films sortis dans cette plage sont proposés. Et, si tu veux, **créer un compte** (facultatif) pour conserver ton historique de joueur.
+Tu peux aussi **choisir une période** (« 1990 – 1999 », « avant 1970 »…) et **un ou plusieurs pays d'origine** : seuls des films sortis dans cette plage et venant de ces pays sont proposés. Et, si tu veux, **créer un compte** (facultatif) pour conserver ton historique de joueur.
 
 Les répliques viennent de deux sources :
 - **44 répliques embarquées** (`data/quotes.json`), toujours disponibles, même hors ligne ;
@@ -255,6 +255,16 @@ Le panneau « Période » au-dessus de la réplique accepte deux années (l'une 
 
 La plage guide aussi la récolte : les années choisies qui manquent de films passent en tête de la moisson, via les catégories Wikiquote « Œuvre de 1995 »… (qui mélangent films, livres et séries : seules les pages avec une fiche `{{Réf Film}}` ou une catégorie « Film… » sont gardées). Si aucun film n'est encore disponible pour la période, l'interface le dit et réessaie toute seule quelques fois pendant que la récolte cherche.
 
+### Pays d'origine
+
+Le panneau « Pays d'origine », sous la période, liste les pays des films avec leur nombre de répliques. On peut en cocher **plusieurs** puis cliquer sur **Appliquer** : un film est proposé s'il vient de l'un d'eux (une coproduction compte pour chacun de ses pays). Le choix se combine avec la période et il est mémorisé dans le navigateur.
+
+- **« Tous » (ou tous les pays cochés) = aucun filtre.** Les films dont on ne connaît pas le pays restent alors possibles ; dès qu'un pays est choisi, ils sont écartés.
+- Les nombres suivent la période choisie. Un pays déjà choisi reste affiché (à 0) si la période n'a aucun de ses films, pour pouvoir le décocher.
+- Quand **un seul** pays est choisi, l'indice « Pays d'origine » n'est plus proposé : il ne dirait rien. Avec plusieurs pays, il reste utile.
+- La récolte s'adapte : la catégorie Wikiquote du pays choisi (« Film japonais »…) passe en tête, avant les autres. Les pays que la récolte sait aller chercher (Allemagne, Australie, Belgique, Canada, Espagne, États-Unis, France, Italie, Japon, Royaume-Uni) sont proposés dès le démarrage, même sans réplique. Ils sont jugés sur la période choisie : un pays bien fourni, mais pas pour cette période, reste prioritaire.
+- **Limite des données.** Wikiquote en français ne classe les films par nationalité que pour une quinzaine de pays, et la plupart n'ont que quelques pages : à la date de rédaction, environ 330 pages pour « Film américain », 280 pour « Film français », 60 pour « Film britannique », 45 pour « Film italien », 20 pour « Film allemand », moins de 10 pour chacun des autres. Un pays absent de Wikiquote ne peut donc pas être proposé. Seules les trois premières nationalités d'une page sont retenues.
+
 ### Comptes et historique
 
 Les comptes sont **facultatifs** : sans compte, rien ne change. Avec un compte (pseudo + mot de passe, sans e-mail), chaque réponse révélée est ajoutée à l'historique, et le joueur indique s'il avait trouvé (« Oui / Non »). Le bouton **Mon historique** affiche les 50 dernières parties et les statistiques (parties, trouvées, taux de réussite, indices par partie). Les 300 dernières parties sont conservées.
@@ -277,7 +287,7 @@ Le navigateur ne reçoit au départ que la réplique et la **liste** des indices
 
 | Route | Rôle |
 |---|---|
-| `GET /api/quote?from=1990&to=1999&exclude=id1,id2` | Tire une réplique au hasard parmi les films de la période (`from` / `to` facultatifs) en évitant celles déjà vues (si tout a été vu, le tirage repart de zéro : `reset: true`) ; `empty: true` si la période n'a aucun film |
+| `GET /api/quote?from=1990&to=1999&countries=France,Italie&exclude=id1,id2` | Tire une réplique au hasard parmi les films de la période (`from` / `to` facultatifs) et des pays demandés (`countries`, noms séparés par des virgules, facultatif : absent ou vide = aucun filtre) en évitant celles déjà vues (si tout a été vu, le tirage repart de zéro : `reset: true`) ; `empty: true` si aucun film ne correspond. La réponse contient aussi `countries` (`[{ name, count }]`, les pays proposés dans la période) |
 | `GET /api/quote/:id/hint/:key` | Révèle un indice (`year`, `country`, `genre`, `director`, `actor`, `character`, `initial`) |
 | `GET /api/quote/:id/answer` | Révèle le titre, la fiche complète et la source |
 | `POST /api/auth/register`, `/login`, `/logout` · `GET /api/auth/me` | Compte du joueur (corps JSON `{ username, password }`) |
@@ -290,7 +300,7 @@ Le navigateur ne reçoit au départ que la réplique et la **liste** des indices
 data/quotes.json   les répliques embarquées
 src/server.js      serveur HTTP (API + fichiers statiques) et démarrage
 src/quotes.js      indices, vues publiques, tirage
-src/pool.js        réservoir de répliques (filtre par années) + cache JSON sur disque
+src/pool.js        réservoir de répliques (filtre par années et par pays) + cache JSON sur disque
 src/auth.js        mots de passe (scrypt), jetons, cookies, limiteur de tentatives
 src/users.js       comptes, sessions et historique des joueurs (fichier JSON)
 src/harvester.js   moissonneur d'arrière-plan (débit, reprise, arrêt propre)

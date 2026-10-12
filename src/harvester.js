@@ -1,6 +1,6 @@
 'use strict';
 
-const { CATEGORIES, parseFilmPage } = require('./wikiquote');
+const { CATEGORIES, countryCategory, countryOfCategory, parseFilmPage } = require('./wikiquote');
 
 const MIN_WAIT_MS = 1_000;
 const MAX_RATE_LIMIT_WAIT_MS = 10 * 60_000;
@@ -12,6 +12,10 @@ const FIRST_YEAR = 1888;
 const MAX_PRIORITY_YEARS = 12; // années traitées à la fois
 const ENOUGH_PER_YEAR = 40; // au-delà, une année est considérée comme bien fournie
 const yearCategory = (year) => `Œuvre de ${year}`;
+
+// Moisson ciblée sur des pays (catégories « Film français »…).
+const MAX_PRIORITY_COUNTRIES = 6; // pays traités à la fois
+const ENOUGH_PER_COUNTRY = 100; // au-delà, un pays est considéré comme bien fourni
 
 function defaultSleep(ms, signal) {
   return new Promise((resolve) => {
@@ -133,31 +137,58 @@ function createHarvester({
     return running;
   }
 
+  /** Les catégories à moissonner d'abord, les moins fournies en tête, et pas plus de `limit`. */
+  function leastFilled(candidates, limit) {
+    return candidates
+      .filter(({ category, have, enough }) => category && !state.cursors[category]?.done && have < enough)
+      .sort((a, b) => a.have - b.have)
+      .slice(0, limit)
+      .map((c) => c.category);
+  }
+
   /**
-   * Un joueur a choisi une plage d'années : les années les moins fournies passent en tête
-   * de la moisson (et la moisson redémarre si elle s'était arrêtée).
+   * Un joueur a choisi une plage d'années et/ou des pays : les années et les pays les moins fournis passent
+   * en tête de la moisson (et la moisson redémarre si elle s'était arrêtée). Les pays d'abord, puis les années.
+   * Les deux filtres se combinent : un pays est jugé sur la période choisie, une année sur les pays choisis.
    * Renvoie les catégories retenues.
    */
-  function prioritize({ from, to }) {
-    if (!Number.isInteger(from) || !Number.isInteger(to) || from > to) return [];
-    const counts = pool.yearCounts();
-    const candidates = [];
-    for (let year = Math.max(from, FIRST_YEAR); year <= Math.min(to, new Date().getFullYear()); year += 1) {
-      const category = yearCategory(year);
-      const have = counts.get(year) ?? 0;
-      if (!state.cursors[category]?.done && have < ENOUGH_PER_YEAR) candidates.push({ category, have });
+  function prioritize({ from, to, countries = [] }) {
+    const period = Number.isInteger(from) && Number.isInteger(to) && from <= to ? { from, to } : null;
+    const wanted = Array.isArray(countries) ? countries : [];
+    if (!period && wanted.length === 0) return [];
+
+    const countryCounts = pool.countryCounts(period ?? {});
+    const countryCategories = leastFilled(
+      wanted.map((country) => ({
+        category: countryCategory(country),
+        have: countryCounts.get(country) ?? 0,
+        enough: ENOUGH_PER_COUNTRY,
+      })),
+      MAX_PRIORITY_COUNTRIES,
+    );
+
+    const yearCategories = [];
+    if (period) {
+      const yearCounts = pool.yearCounts({ countries: wanted });
+      const years = [];
+      for (let year = Math.max(period.from, FIRST_YEAR); year <= Math.min(period.to, new Date().getFullYear()); year += 1) {
+        years.push({ category: yearCategory(year), have: yearCounts.get(year) ?? 0, enough: ENOUGH_PER_YEAR });
+      }
+      yearCategories.push(...leastFilled(years, MAX_PRIORITY_YEARS));
     }
-    priority = candidates
-      .sort((a, b) => a.have - b.have)
-      .slice(0, MAX_PRIORITY_YEARS)
-      .map((c) => c.category);
+
+    priority = [...countryCategories, ...yearCategories];
     if (priority.length > 0) start();
     return priority;
   }
 
+  /** Les pays que la moisson générale sait récolter (une catégorie « Film <nationalité> » dans sa liste). */
+  const harvestableCountries = [...new Set(categories.map(countryOfCategory).filter(Boolean))];
+
   return {
     start,
     prioritize,
+    harvestableCountries,
     async stop() {
       controller.abort();
       await running;

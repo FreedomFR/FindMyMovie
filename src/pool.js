@@ -6,6 +6,9 @@ const { pickRandom } = require('./quotes');
 
 const dedupeKey = (r) => `${r.quote.toLowerCase().replace(/\s+/g, ' ')}|${r.title.toLowerCase()}`;
 
+/** Les pays d'origine d'un film : une coproduction en a plusieurs, séparés par « / ». Aucun si on ne les connaît pas. */
+const countriesOf = (record) => (record.country ? record.country.split(' / ') : []);
+
 /** L'ensemble des répliques jouables : le jeu de départ, puis ce que le moissonneur ajoute. */
 class QuotePool {
   constructor(records = []) {
@@ -37,12 +40,22 @@ class QuotePool {
     return added;
   }
 
-  /** Les répliques dont le film est sorti entre `from` et `to` (bornes incluses). Sans plage : toutes. */
-  inRange({ from, to } = {}) {
-    if (from == null && to == null) return this.records;
+  /**
+   * Les répliques qui passent le filtre : film sorti entre `from` et `to` (bornes incluses) et dont
+   * l'un des pays d'origine est dans `countries`. Un filtre absent (ou une liste de pays vide) laisse tout passer ;
+   * un film dont on ne connaît pas le pays n'est donc écarté que si des pays sont demandés.
+   */
+  inRange({ from, to, countries } = {}) {
+    const byYear = from != null || to != null;
+    const wanted = countries?.length ? new Set(countries) : null;
+    if (!byYear && !wanted) return this.records;
     const min = from ?? -Infinity;
     const max = to ?? Infinity;
-    return this.records.filter((r) => Number.isInteger(r.year) && r.year >= min && r.year <= max);
+    return this.records.filter(
+      (r) =>
+        (!byYear || (Number.isInteger(r.year) && r.year >= min && r.year <= max)) &&
+        (!wanted || countriesOf(r).some((country) => wanted.has(country))),
+    );
   }
 
   /** Première et dernière année de sortie présentes dans le réservoir. */
@@ -51,17 +64,38 @@ class QuotePool {
     return years.length ? { min: Math.min(...years), max: Math.max(...years) } : null;
   }
 
-  /** Nombre de répliques par année de sortie. */
-  yearCounts() {
+  /** Nombre de répliques par année de sortie, parmi les pays demandés (tous, par défaut). */
+  yearCounts({ countries } = {}) {
     const counts = new Map();
-    for (const { year } of this.records) {
+    for (const { year } of this.inRange({ countries })) {
       if (Number.isInteger(year)) counts.set(year, (counts.get(year) ?? 0) + 1);
     }
     return counts;
   }
 
-  pick(excludeIds, rng, range) {
-    return pickRandom(this.inRange(range), excludeIds, rng);
+  /** Nombre de répliques par pays d'origine (une coproduction compte pour chacun de ses pays), dans la période donnée. */
+  countryCounts({ from, to } = {}) {
+    const counts = new Map();
+    for (const record of this.inRange({ from, to })) {
+      for (const country of countriesOf(record)) counts.set(country, (counts.get(country) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  /**
+   * Les pays présents dans la période donnée, du mieux fourni au moins fourni : `[{ name, count }]`.
+   * Les pays de `extra` sont ajoutés (avec zéro réplique) s'ils manquent : ceux que la moisson ira chercher.
+   */
+  countries(range = {}, extra = []) {
+    const counts = this.countryCounts(range);
+    for (const name of extra) if (!counts.has(name)) counts.set(name, 0);
+    return [...counts]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'fr'));
+  }
+
+  pick(excludeIds, rng, filter) {
+    return pickRandom(this.inRange(filter), excludeIds, rng);
   }
 }
 

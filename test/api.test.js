@@ -59,7 +59,11 @@ test("/api/quote ne révèle ni la réponse ni le contenu des indices", async ()
     assert.equal(body.total, movies.length);
     assert.deepEqual(body.hints.map((h) => h.key), quotes.availableHints(movie).map((h) => h.key));
 
-    const raw = JSON.stringify(body);
+    // Les pays proposés et les bornes d'années décrivent le réservoir, pas la réplique tirée : on les met de côté
+    // (sinon un film de 1938 ou de 2014 ressemblerait à une fuite, ses années étant les bornes du réservoir).
+    const { countries, bounds, ...forThisMovie } = body;
+    assert.ok(Array.isArray(countries) && bounds);
+    const raw = JSON.stringify(forThisMovie);
     for (const secret of [movie.title, movie.director, movie.actor, movie.country, String(movie.year)]) {
       // La citation peut contenir par hasard le titre ou une année : on ne vérifie que le reste.
       if (!movie.quote.includes(secret)) assert.ok(!raw.includes(secret), `fuite : « ${secret} »`);

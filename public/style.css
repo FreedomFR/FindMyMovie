@@ -207,6 +207,9 @@ button.hint.revealed { cursor: default; }
 .period-form { margin-top: 12px; }
 .period-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .period-fields label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.period + .period { margin-top: -8px; } /* le panneau des pays se range sous celui de la période */
+.period-form > .muted { margin: 0; }
+.country-actions { margin-top: 12px; }
 
 input[type="number"],
 .field input {

@@ -22,6 +22,12 @@ const els = {
   presets: $('presets'),
   yearFrom: $('year-from'),
   yearTo: $('year-to'),
+  // pays
+  countriesPanel: $('countries'),
+  countriesLabel: $('countries-label'),
+  countriesCount: $('countries-count'),
+  countriesForm: $('countries-form'),
+  countryChips: $('country-chips'),
   // compte
   loginOpen: $('login-open'),
   userMenu: $('user-menu'),
@@ -50,6 +56,9 @@ const els = {
 
 const SEEN_KEY = 'findmymovie.seen';
 const RANGE_KEY = 'findmymovie.range';
+const COUNTRIES_KEY = 'findmymovie.countries';
+const MAX_COUNTRIES = 40; // comme côté serveur
+const COUNTRY_PATTERN = /^\p{L}[\p{L} '’-]{0,39}$/u; // idem
 // On n'envoie au serveur que les dernières répliques vues (l'URL doit rester courte).
 const MAX_EXCLUDED = 150;
 const MIN_YEAR = 1888;
@@ -76,6 +85,9 @@ const state = {
   refreshQueued: false,
   seen: loadSeen(),
   range: loadRange(), // { from, to } ; null = pas de borne
+  countries: loadCountries(), // pays choisis ; vide = tous (aucun filtre)
+  countryList: [], // pays proposés par le serveur : [{ name, count }]
+  pendingCountries: new Set(), // sélection en cours dans le panneau, avant « Appliquer »
   bounds: null, // années disponibles côté serveur
   emptyRetries: 0,
   retryTimer: null,
@@ -117,6 +129,26 @@ function loadRange() {
 function saveRange() {
   try {
     localStorage.setItem(RANGE_KEY, JSON.stringify(state.range));
+  } catch {
+    // idem
+  }
+}
+
+function loadCountries() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(COUNTRIES_KEY) || '[]');
+    if (!Array.isArray(stored)) return [];
+    // Un nom que le serveur refuserait (400) bloquerait le jeu : on ne garde que les noms bien formés.
+    const names = stored.filter((name) => typeof name === 'string' && COUNTRY_PATTERN.test(name));
+    return [...new Set(names)].slice(0, MAX_COUNTRIES);
+  } catch {
+    return [];
+  }
+}
+
+function saveCountries() {
+  try {
+    localStorage.setItem(COUNTRIES_KEY, JSON.stringify(state.countries));
   } catch {
     // idem
   }
@@ -221,7 +253,85 @@ function updateCounts(data) {
     els.yearFrom.placeholder = String(data.bounds.min);
     els.yearTo.placeholder = String(data.bounds.max);
   }
-  els.periodCount.textContent = isRangeActive() ? `· ${data.inRange} réplique${data.inRange > 1 ? 's' : ''}` : '';
+  const matching = `· ${data.inRange} réplique${data.inRange > 1 ? 's' : ''}`;
+  els.periodCount.textContent = isRangeActive() ? matching : '';
+  els.countriesCount.textContent = isCountryFilterActive() ? matching : '';
+
+  state.countryList = data.countries ?? [];
+  // Les pastilles ne sont pas reconstruites pendant que le joueur choisit (il perdrait le focus) ; vides, elles n'ont rien à perdre.
+  if (els.countriesPanel.open && !els.countryChips.hasChildNodes()) renderCountryChips();
+}
+
+// ---- pays ----------------------------------------------------------------------------------
+
+const isCountryFilterActive = () => state.countries.length > 0;
+
+function countriesLabel(names) {
+  if (names.length === 0) return 'tous';
+  return names.length <= 3 ? names.join(', ') : `${names.length} pays`;
+}
+
+function renderCountries() {
+  els.countriesLabel.textContent = countriesLabel(state.countries);
+}
+
+/** Les pays proposés : ceux du serveur, plus ceux déjà choisis qui n'ont aucune réplique dans la période. */
+function countryOptions() {
+  const options = [...state.countryList];
+  for (const name of state.countries) {
+    if (!options.some((option) => option.name === name)) options.push({ name, count: 0 });
+  }
+  return options;
+}
+
+/** Rien à filtrer : aucun pays choisi, ou tous ceux qui sont proposés. */
+function coversAllCountries(selection) {
+  return selection.size === 0 || countryOptions().every(({ name }) => selection.has(name));
+}
+
+function countryChip(label, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'chip';
+  button.textContent = label;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+/** « Tous » est allumée quand rien n'est filtré ; les autres pastilles reflètent la sélection en cours. */
+function syncCountryChips() {
+  const everything = coversAllCountries(state.pendingCountries);
+  for (const chip of els.countryChips.children) {
+    const pressed = chip.dataset.country === undefined ? everything : state.pendingCountries.has(chip.dataset.country);
+    chip.setAttribute('aria-pressed', String(pressed));
+  }
+}
+
+function renderCountryChips() {
+  const all = countryChip('Tous', () => {
+    state.pendingCountries.clear();
+    syncCountryChips();
+  });
+  const chips = countryOptions().map(({ name, count }) => {
+    const chip = countryChip(`${name} (${count})`, () => {
+      if (!state.pendingCountries.delete(name)) state.pendingCountries.add(name);
+      syncCountryChips();
+    });
+    chip.dataset.country = name;
+    return chip;
+  });
+  els.countryChips.replaceChildren(all, ...chips);
+  syncCountryChips();
+}
+
+function applyCountries() {
+  // Tout choisir revient à ne rien filtrer : les films dont on ne connaît pas le pays restent alors possibles.
+  state.countries = coversAllCountries(state.pendingCountries) ? [] : [...state.pendingCountries].slice(0, MAX_COUNTRIES);
+  state.emptyRetries = 0;
+  saveCountries();
+  renderCountries();
+  els.countriesPanel.open = false;
+  nextQuote();
 }
 
 // ---- indices et réponse --------------------------------------------------------------------
@@ -365,12 +475,16 @@ function showEmpty() {
   els.answer.replaceChildren();
   els.next.classList.remove('emphasis');
 
+  const filters = [];
+  if (isRangeActive()) filters.push(`période « ${rangeLabel(state.range)} »`);
+  if (isCountryFilterActive()) filters.push(`pays « ${state.countries.join(', ')} »`);
+
   const canRetry = state.emptyRetries < EMPTY_RETRY_MAX;
   els.empty.textContent =
-    `Aucune réplique pour la période « ${rangeLabel(state.range)} » pour l'instant. ` +
+    `Aucune réplique pour l'instant${filters.length ? ` (${filters.join(', ')})` : ''}. ` +
     (canRetry
-      ? 'La récolte cherche des films de cette époque : nouvelle tentative automatique dans quelques secondes…'
-      : 'Élargis la période ou réessaie plus tard avec « Réplique suivante ».');
+      ? 'La récolte cherche des films correspondants : nouvelle tentative automatique dans quelques secondes…'
+      : 'Élargis les filtres ou réessaie plus tard avec « Réplique suivante ».');
   els.empty.hidden = false;
 
   if (canRetry) {
@@ -393,6 +507,7 @@ async function nextQuote() {
     if (exclude) params.set('exclude', exclude);
     if (state.range.from !== null) params.set('from', state.range.from);
     if (state.range.to !== null) params.set('to', state.range.to);
+    if (isCountryFilterActive()) params.set('countries', state.countries.join(','));
     const query = params.toString();
 
     const data = await api(`/api/quote${query ? `?${query}` : ''}`);
@@ -403,7 +518,9 @@ async function nextQuote() {
     state.seen.push(data.id);
     saveSeen();
 
-    state.current = { id: data.id, quote: data.quote, hints: data.hints };
+    // Un seul pays choisi : l'indice « Pays d'origine » ne dirait plus rien, on ne le propose pas.
+    const hints = state.countries.length === 1 ? data.hints.filter((hint) => hint.key !== 'country') : data.hints;
+    state.current = { id: data.id, quote: data.quote, hints };
     state.revealedHints = 0;
     state.emptyRetries = 0;
 
@@ -416,7 +533,7 @@ async function nextQuote() {
     els.answer.replaceChildren();
     els.hintsSection.hidden = false;
     els.next.classList.remove('emphasis');
-    renderHints(data.hints);
+    renderHints(hints);
   } catch {
     showError('Impossible de charger une réplique. Vérifie ta connexion puis réessaie.');
   } finally {
@@ -643,6 +760,16 @@ els.periodForm.addEventListener('submit', (event) => {
   }
 });
 
+els.countriesPanel.addEventListener('toggle', () => {
+  if (!els.countriesPanel.open) return;
+  state.pendingCountries = new Set(state.countries); // on repart de ce qui est appliqué
+  renderCountryChips();
+});
+els.countriesForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  applyCountries();
+});
+
 els.loginOpen.addEventListener('click', openAuth);
 els.logout.addEventListener('click', logout);
 els.historyOpen.addEventListener('click', openHistory);
@@ -656,5 +783,6 @@ closeOnBackdropClick(els.historyDialog);
 
 buildPresets();
 renderRange();
+renderCountries();
 loadAccount();
 nextQuote();
